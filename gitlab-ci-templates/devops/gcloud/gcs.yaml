@@ -1,0 +1,47 @@
+---
+include:
+  - local: //devops/gcloud/config.yaml
+
+.template:gcloud:bucket:upload:
+  image: eu.gcr.io/digital-staging/bases/ci-tools:8d87ff21
+  interruptible: false
+  variables:
+    BUCKET_DST: ""
+    BUCKET_ROOT_DIR: ""
+    ZIP_FILES: "false"
+    ZIP_NAME: "${CI_PROJECT_NAME}"
+    ZIP_SUFFIX: ""
+    OBJECT_SRC: "./"
+    GCLOUD_KEY:
+      !reference [".template:gcloud:config:auth", "variables", "GCLOUD_KEY"]
+  script:
+    - !reference [".template:gcloud:config:auth", "script"]
+    - |
+      if [ "$ZIP_FILES" == "true" ]
+      then
+         [ -n "$ZIP_SUFFIX" ]&& ZIP_NAME=${ZIP_NAME}-${ZIP_SUFFIX}
+         zip ${ZIP_NAME}.zip $OBJECT_SRC
+         OBJECT_SRC=${ZIP_NAME}.zip
+      fi
+    - gsutil cp -r $OBJECT_SRC gs://$BUCKET_DST/$BUCKET_ROOT_DIR/
+
+.template:gcloud:bucket:upload:cloud-function:
+  extends: .template:gcloud:bucket:upload
+  variables:
+    BUCKET_ROOT_DIR: "${CI_PROJECT_NAME}"
+    GCLOUD_KEY: $GCS_CLOUD_FUNCTIONS_KEY
+    ZIP_FILES: "true"
+    CF_FILES: ""
+    OBJECT_SRC: $CF_FILES
+
+.template:gcloud:bucket:upload:cloud-function:staging:
+  extends: .template:gcloud:bucket:upload:cloud-function
+  variables:
+    BUCKET_DST: "digital-staging-gf-artifacts"
+  environment:
+    name: staging
+
+.template:gcloud:bucket:upload:cloud-function:review:
+  extends: .template:gcloud:bucket:upload:cloud-function:staging
+  variables:
+    ZIP_SUFFIX: $CI_COMMIT_SHORT_SHA

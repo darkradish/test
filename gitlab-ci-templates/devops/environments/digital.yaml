@@ -1,0 +1,18 @@
+---
+.template:environments:digital:review:
+  variables:
+    GOOGLE_PROJECT_ID: "${GOOGLE_CLOUD_PROJECT}"
+  environment:
+    name: $CI_COMMIT_REF_SLUG
+    url: https://${RELEASE_HOST}
+    auto_stop_in: 4h
+    on_stop: deploy:review:stop
+
+.template:environments:digital:staging:
+  variables:
+    GOOGLE_PROJECT_ID: "${GOOGLE_CLOUD_PROJECT}"
+  environment:
+    name: $CI_COMMIT_REF_SLUG
+    url: https://${RELEASE_HOST}
+    auto_stop_in: 4h
+    on_stop: deploy:review:stop

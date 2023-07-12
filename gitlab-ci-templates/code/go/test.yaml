@@ -1,0 +1,9 @@
+---
+.template:go:test:lint:
+  image: golang:${GOLANG_VERSION}-alpine
+  interruptible: true
+  variables:
+    GOLANG_VERSION: 1.17
+  script:
+    - go get -u golang.org/x/lint/golint
+    - golint -set_exit_status

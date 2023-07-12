@@ -1,0 +1,65 @@
+---
+.template:php:test:lint:phpcs:
+  image: $PHP_DOCKER_IMAGE
+  interruptible: true
+  variables:
+    PHP_DOCKER_IMAGE: eu.gcr.io/$GOOGLE_CLOUD_DIGITAL_STAGING_PROJECT/bases/php:$PHP_VERSION
+    PHP_VERSION: "master-7.4-cli"
+  script:
+    - php vendor/bin/phpcs
+
+.template:php:test:unit:
+  image: $PHP_DOCKER_IMAGE
+  interruptible: true
+  variables:
+    PHP_DOCKER_IMAGE: eu.gcr.io/$GOOGLE_CLOUD_DIGITAL_STAGING_PROJECT/bases/php:$PHP_VERSION
+    PHP_VERSION: "master-7.4-fpm"
+    XDEBUG_MODE: coverage
+    LOGS_PATH: tests/_output/coverage-test-unit
+  artifacts:
+    paths:
+      - var/log
+      - $LOGS_PATH
+    expire_in: "7 days"
+    when: always
+    reports:
+      junit: $LOGS_PATH/junit.xml
+  script:
+    - make gitlab-test-unit
+    - sed -i "s@$(pwd)@.@" $LOGS_PATH/*
+
+.template:php:test:func:
+  image: $PHP_DOCKER_IMAGE
+  interruptible: true
+  variables:
+    PHP_DOCKER_IMAGE: eu.gcr.io/$GOOGLE_CLOUD_DIGITAL_STAGING_PROJECT/bases/php:$PHP_VERSION
+    PHP_VERSION: "master-7.4-fpm"
+    XDEBUG_MODE: coverage
+    LOGS_PATH: tests/_output/coverage-test-func
+  artifacts:
+    paths:
+      - var/log
+      - $LOGS_PATH
+    expire_in: "7 days"
+    when: always
+    reports:
+      junit: $LOGS_PATH/junit.xml
+  script:
+    - make gitlab-test-func
+    - sed -i "s@$(pwd)@.@" $LOGS_PATH/*
+
+.template:php:test:security:
+  stage: test
+  image: $PHP_DOCKER_IMAGE
+  interruptible: true
+  variables:
+    PHP_DOCKER_IMAGE: eu.gcr.io/$GOOGLE_CLOUD_DIGITAL_STAGING_PROJECT/bases/php:$PHP_VERSION
+    PHP_VERSION: "master-7.4-cli"
+    LOCAL_PHP_SECURITY_CHECKER_VERSION: "1.1.1"
+  dependencies: []
+  script:
+    - |
+      curl -sSL https://github.com/fabpot/local-php-security-checker/releases/download/v${LOCAL_PHP_SECURITY_CHECKER_VERSION}/local-php-security-checker_${LOCAL_PHP_SECURITY_CHECKER_VERSION}_linux_amd64 \
+        -o /tmp/local-php-security-checker && \
+        chmod +x /tmp/local-php-security-checker
+    - /tmp/local-php-security-checker --path=./composer.lock

@@ -1,0 +1,204 @@
+---
+.template:gcloud:pubsub:auth:
+  variables:
+    PUBSUB_GCLOUD_CREDENTIALS: ""
+    GOOGLE_PROJECT_ID: ""
+  script:
+    - gcloud config set project $GOOGLE_PROJECT_ID
+    - gcloud auth activate-service-account --key-file <( echo "$PUBSUB_GCLOUD_CREDENTIALS" )
+
+# Create topics templates
+.template:gcloud:pubsub:topics:create:
+  image: google/cloud-sdk
+  interruptible: true
+  variables:
+    PUBSUB_GCLOUD_CREDENTIALS: ""
+    GOOGLE_PROJECT_ID: ""
+    TOPIC_PREFIX: ""
+    PUBLISHER_SERVICE_ACCOUNT: ""
+    LABELS: "owner=$CI_PROJECT_NAME,managed-by=gitlab-ci,entity=digital"
+    FILTER_TOPIC_EXISTS: "labels.managed-by=gitlab-ci AND labels.owner:$CI_PROJECT_NAME"
+    TOPIC_LIST: ""
+  script:
+    - !reference [".template:gcloud:pubsub:auth", "script"]
+    - |
+      function create_topic {
+        topicName="$1"
+        gcloud pubsub topics create "${topicName}" --labels="$LABELS" > /dev/null\
+        && \
+        gcloud pubsub topics add-iam-policy-binding ${topicName} \
+          --member serviceAccount:${PUBLISHER_SERVICE_ACCOUNT}@${GOOGLE_PROJECT_ID}.iam.gserviceaccount.com \
+          --role="roles/pubsub.publisher" > /dev/null
+        if [ $? -ne 0 ] ; then
+          echo "ERROR: Unable to create topic $topicName or Iam policy" > /dev/stderr
+          exit 1
+        fi
+      }
+      echo "Build cache with filter=\"$FILTER_TOPIC_EXISTS\" before creating topics"
+      cacheTopicFile=/tmp/gcloud-pubsub-topic-list
+      gcloud pubsub topics list --filter="$FILTER_TOPIC_EXISTS" --format="value(name)" > $cacheTopicFile
+
+      for topic in $TOPIC_LIST; do
+        topicName=${TOPIC_PREFIX}${topic}
+
+        if grep --silent $topicName$ $cacheTopicFile ; then
+          echo "Topic \"$topicName\" already exists."
+          continue
+        fi
+
+        # Spawn the creation of the topic in a child process
+        create_topic $topicName &
+
+      done
+
+      # Wait for all process to complete
+      wait && echo "All child process exited successfully"
+
+.template:gcloud:pubsub:topics:create:review:
+  extends: .template:gcloud:pubsub:topics:create
+  environment:
+    name: review/$CI_COMMIT_REF_NAME
+    action: prepare
+  variables:
+    PUBSUB_GCLOUD_CREDENTIALS: "$PUBSUB_EDITOR_DIGITAL_STAGING_KEY_SECRET_FILE"
+    GOOGLE_PROJECT_ID: "$GOOGLE_CLOUD_DIGITAL_STAGING_PROJECT"
+    LABELS: "owner=$CI_PROJECT_NAME,managed-by=gitlab-ci,env=$CI_ENVIRONMENT_SLUG,entity=digital"
+    TOPIC_PREFIX: "${CI_ENVIRONMENT_SLUG}-"
+    PUBLISHER_SERVICE_ACCOUNT: ""
+    TOPIC_LIST: ""
+    FILTER_TOPIC_EXISTS: "labels.managed-by=gitlab-ci AND labels.env:$CI_ENVIRONMENT_SLUG AND labels.owner:$CI_PROJECT_NAME"
+
+# Create subscriptions templates
+.template:gcloud:pubsub:subscriptions:create:
+  image: google/cloud-sdk
+  interruptible: true
+  variables:
+    PUBSUB_GCLOUD_CREDENTIALS: ""
+    GOOGLE_PROJECT_ID: ""
+    SUBSCRIPTION_PREFIX: ""
+    SUBSCRIBER_SERVICE_ACCOUNT: ""
+    LABELS: "owner=$CI_PROJECT_NAME,managed-by=gitlab-ci,entity=digital"
+    FILTER_SUBSCRIPTION_EXISTS: "labels.managed-by=gitlab-ci AND labels.owner:$CI_PROJECT_NAME"
+    SUBSCRIPTION_LIST: ""
+    BIND_TO_STAGING_TOPIC: "false"
+    SUBSCRIPTION_EXPIRE_IN: "90d"
+  script:
+    - !reference [".template:gcloud:pubsub:auth", "script"]
+    - |
+      function create_sub {
+        subscriptionName="$1"
+        topicName="$2"
+        topicProject="$3"
+        gcloud pubsub subscriptions create "${subscriptionName}" \
+          --topic=$topicName \
+          --topic-project=$topicProject \
+          --labels="$LABELS" \
+          --expiration-period=$SUBSCRIPTION_EXPIRE_IN > /dev/null \
+        && \
+        gcloud pubsub subscriptions add-iam-policy-binding ${subscriptionName} \
+          --member serviceAccount:${SUBSCRIBER_SERVICE_ACCOUNT}@${GOOGLE_PROJECT_ID}.iam.gserviceaccount.com \
+          --role="roles/pubsub.subscriber" > /dev/null
+        if [ $? -ne 0 ] ; then
+          echo "ERROR: Unable to create subscription $subscriptionName or Iam policy" > /dev/stderr
+        fi
+      }
+      echo "Build cache with filter=\"$FILTER_SUBSCRIPTION_EXISTS\" before creating subscriptions"
+      cacheSubscriptionFile=/tmp/gcloud-pubsub-subscription-list
+      gcloud pubsub subscriptions list --filter="$FILTER_SUBSCRIPTION_EXISTS" --format="value(name)" > $cacheSubscriptionFile
+
+      for subscription in $SUBSCRIPTION_LIST; do
+        subscriptionName=${SUBSCRIPTION_PREFIX}${subscription}
+        topicProject="digital-staging"
+        topicName=$(echo ${subscriptionName} | sed "s/${CI_PROJECT_NAME}_//")
+        if [ $USE_EXISTING_TOPICS == "true" ]; then
+          topicName=$(echo ${subscription} | sed "s/${CI_PROJECT_NAME}_//")
+        fi
+        if [ $BIND_TO_REC_TOPIC == "true" ]; then
+            subscriptionName=${SUBSCRIPTION_PREFIX}$(echo "$subscription" | awk -F "/" '{print $2}')
+            topicProject=$(echo "$subscription" | awk -F "/" '{print $1}')
+            topicName=$(echo "$subscription" | awk -F "/" '{print $2}' | sed "s/${CI_PROJECT_NAME}_//")
+            echo "DEBUG: $subscriptionName  |  $topicProject  | $topicName"
+        fi
+        if grep --silent $subscriptionName$ $cacheSubscriptionFile ; then
+          echo "Subscription \"$subscriptionName\" already exists."
+          continue
+        fi
+
+        # Spawn the creation of the subscription in a child process
+        create_sub $subscriptionName $topicName $topicProject &
+
+      done
+
+      # Wait for all process to complete
+      wait && echo "All child process exited successfully"
+
+.template:gcloud:pubsub:subscriptions:create:review:
+  extends: .template:gcloud:pubsub:subscriptions:create
+  environment:
+    name: review/$CI_COMMIT_REF_NAME
+    action: prepare
+  variables:
+    PUBSUB_GCLOUD_CREDENTIALS: "$PUBSUB_EDITOR_DIGITAL_STAGING_KEY_SECRET_FILE"
+    GOOGLE_PROJECT_ID: "$GOOGLE_CLOUD_DIGITAL_STAGING_PROJECT"
+    LABELS: "owner=$CI_PROJECT_NAME,managed-by=gitlab-ci,env=$CI_ENVIRONMENT_SLUG,entity=digital"
+    SUBSCRIPTION_PREFIX: "${CI_ENVIRONMENT_SLUG}-"
+    SUBSCRIBER_SERVICE_ACCOUNT: ""
+    SUBSCRIPTION_LIST: ""
+    FILTER_SUBSCRIPTION_EXISTS: "labels.managed-by=gitlab-ci AND labels.env:$CI_ENVIRONMENT_SLUG AND labels.owner:$CI_PROJECT_NAME"
+
+# Delete templates
+.template:gcloud:pubsub:topics:delete:
+  image: google/cloud-sdk
+  variables:
+    PUBSUB_GCLOUD_CREDENTIALS: ""
+    GOOGLE_PROJECT_ID: ""
+    FILTERS: "labels.managed-by=gitlab-ci"
+  before_script:
+    - !reference [".template:gcloud:pubsub:auth", "script"]
+  script:
+    - |
+      echo "Find topic with filter=\"$FILTERS\""
+      TOPIC_LIST=$(gcloud pubsub topics list --filter="$FILTERS" --format="value(name)")
+      for topic in $TOPIC_LIST; do
+        gcloud pubsub topics delete $topic &
+      done
+      # Wait for all process to complete
+      wait && echo "All child process exited successfully"
+
+.template:gcloud:pubsub:topics:delete:review:
+  extends: .template:gcloud:pubsub:topics:delete
+  environment:
+    name: review/$CI_COMMIT_REF_NAME
+    action: prepare
+  variables:
+    PUBSUB_GCLOUD_CREDENTIALS: "$PUBSUB_EDITOR_DIGITAL_STAGING_KEY_SECRET_FILE"
+    GOOGLE_PROJECT_ID: "$GOOGLE_CLOUD_DIGITAL_STAGING_PROJECT"
+    FILTERS: "labels.managed-by=gitlab-ci AND labels.env=$CI_ENVIRONMENT_SLUG"
+
+.template:gcloud:pubsub:subscriptions:delete:
+  image: google/cloud-sdk
+  variables:
+    PUBSUB_GCLOUD_CREDENTIALS: ""
+    GOOGLE_PROJECT_ID: ""
+    FILTERS: "labels.managed-by=gitlab-ci"
+  before_script:
+    - !reference [".template:gcloud:pubsub:auth", "script"]
+  script:
+    - |
+      echo "Find subscriptions with filter=\"$FILTERS\""
+      SUBSCRIPTION_LIST=$(gcloud pubsub subscriptions list --filter="$FILTERS" --format="value(name)")
+      for subscription in $SUBSCRIPTION_LIST; do
+        gcloud pubsub subscriptions delete $subscription &
+      done
+      # Wait for all process to complete
+      wait && echo "All child process exited successfully"
+
+.template:gcloud:pubsub:subscriptions:delete:review:
+  extends: .template:gcloud:pubsub:subscriptions:delete
+  environment:
+    name: review/$CI_COMMIT_REF_NAME
+    action: prepare
+  variables:
+    PUBSUB_GCLOUD_CREDENTIALS: "$PUBSUB_EDITOR_DIGITAL_STAGING_KEY_SECRET_FILE"
+    GOOGLE_PROJECT_ID: "$GOOGLE_CLOUD_DIGITAL_STAGING_PROJECT"
+    FILTERS: "labels.managed-by=gitlab-ci AND labels.env=$CI_ENVIRONMENT_SLUG"

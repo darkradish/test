@@ -1,0 +1,69 @@
+---
+.template:docker:build:kaniko:
+  interruptible: true
+  image:
+    name: gcr.io/kaniko-project/executor:v${KANIKO_VERSION}-debug
+  tags:
+    - docker
+  variables:
+    KANIKO_OPTS: ""
+    KANIKO_VERSION: "1.9.0"
+    KANIKO_CACHE: "false"
+    IMAGE_TAG: $CI_COMMIT_SHORT_SHA
+    IMAGE_NAME: $CI_PROJECT_NAME
+    REGISTRY_PATH: apps/${CI_PROJECT_NAME}
+    REGISTRY_NAME: mdm-docker-registry
+    REGISTRY_PROJECT: $GOOGLE_ARTIFACT_REGISTRY_PROJECT
+    DOCKERFILE_NAME: "Dockerfile"
+    REGISTRIES_DESTINATIONS: europe-west1-docker.pkg.dev/${REGISTRY_PROJECT}/${REGISTRY_NAME}/${REGISTRY_PATH}/${IMAGE_NAME}:${IMAGE_TAG}
+    KUBERNETES_SERVICE_ACCOUNT_OVERWRITE: $KUBERNETES_SERVICE_ACCOUNT_GAR
+  script:
+    - |
+      [ -z "$IMAGE_NAME" ] && echo "\$IMAGE_NAME is missing from your job." && exit 1
+    - |
+      destinations="$(echo "$REGISTRIES_DESTINATIONS" | sed '/^$/d;s/^/--destination /')"
+    - |
+      /kaniko/executor \
+        --context $CI_PROJECT_DIR \
+        --dockerfile $CI_PROJECT_DIR/${DOCKERFILE_NAME} \
+        --cache=$KANIKO_CACHE \
+        --cache-ttl=168h \
+        ${destinations} \
+        ${KANIKO_OPTS}
+
+.template:docker:build:kaniko:artifactory:
+  extends: .template:docker:build:kaniko
+  variables:
+    ARTIFACTORY_REGISTRY_URL: ""
+    ARTIFACTORY_REGISTRY_USERNAME: ""
+    ARTIFACTORY_REGISTRY_PASSWORD: ""
+    ARTIFACTORY_PATH: ""
+    REGISTRIES_DESTINATIONS: $ARTIFACTORY_REGISTRY_URL/$ARTIFACTORY_PATH/$IMAGE_NAME:$IMAGE_TAG
+  before_script:
+    # kaniko uses Docker credential helpers to push images to a registry. Creating the config.json file inside /kaniko/.docker/config.json
+    - |
+      [ -z "$ARTIFACTORY_REGISTRY_URL" ] && echo "\$ARTIFACTORY_REGISTRY_URL is missing from your job." && exit 1
+      [ -z "$ARTIFACTORY_REGISTRY_USERNAME" ] && echo "\$ARTIFACTORY_REGISTRY_USERNAME is missing from your job." && exit 1
+      [ -z "$ARTIFACTORY_REGISTRY_PASSWORD" ] && echo "\$ARTIFACTORY_REGISTRY_PASSWORD is missing from your job." && exit 1
+      echo "{\"auths\":{\"$ARTIFACTORY_REGISTRY_URL\":{\"username\":\"$ARTIFACTORY_REGISTRY_USERNAME\",\"password\":\"$ARTIFACTORY_REGISTRY_PASSWORD\"}}}" > /kaniko/.docker/config.json
+
+
+# legacy: for gitlab Container Registry
+.template:docker:build:
+  image: docker:stable-dind
+  before_script:
+    - >
+      docker login
+            -u $CI_REGISTRY_USER
+            -p $CI_REGISTRY_PASSWORD
+            $CI_REGISTRY
+  script:
+    - |
+      docker build . \
+       -t \
+       $CI_REGISTRY/${CI_PROJECT_NAMESPACE}/${CI_PROJECT_NAME}\
+       :${CI_COMMIT_REF_NAME}
+    - |
+      docker push \
+        $CI_REGISTRY/${CI_PROJECT_NAMESPACE}/${CI_PROJECT_NAME}\
+        :${CI_COMMIT_REF_NAME}

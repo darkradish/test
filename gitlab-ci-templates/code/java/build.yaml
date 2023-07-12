@@ -1,0 +1,21 @@
+---
+.template:java:build:maven:
+  image: maven:${MAVEN_IMAGE_TAG}
+  interruptible: true
+  variables:
+    MAVEN_IMAGE_TAG: 3.6-openjdk-17-slim
+    MAVEN_OPTS: ""
+  script:
+    - |
+      mvn -s ${MAVEN_SETTINGS} \
+          -B test-compile \
+          ${MAVEN_OPTS}
+  artifacts:
+    paths:
+      - target
+    expire_in: '1 month'
+  cache:
+    paths:
+      - .m2
+  tags:
+    - large

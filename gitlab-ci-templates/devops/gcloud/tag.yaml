@@ -1,0 +1,36 @@
+---
+include:
+  - local: /devops/gcloud/config.yaml
+
+.template:gcloud:tag-image:
+  image:
+    name: europe-west1-docker.pkg.dev/digital-staging/mdm-docker-registry/bases/ci-tools:sdk-devops
+    pull_policy: always
+  variables:
+    REGISTRY_IMAGE_PATH: apps/${CI_PROJECT_NAME}
+    KUBERNETES_SERVICE_ACCOUNT_OVERWRITE: $KUBERNETES_SERVICE_ACCOUNT_GAR
+    GOOGLE_CLOUD_PROJECT_FROM: $GOOGLE_ARTIFACT_REGISTRY_FROM_PROJECT
+    GOOGLE_CLOUD_PROJECT_TO: $GOOGLE_ARTIFACT_REGISTRY_PROJECT
+    REGISTRY_NAME: mdm-docker-registry
+    REGISTRY_DOMAIN: europe-west1-docker.pkg.dev
+    IMAGE_NAME: ''
+    IS_MERGE_FF: 'true'
+  environment:
+    action: prepare
+  script:
+    - |
+      if [ $IS_MERGE_FF == 'true' ]; then
+        git config --global core.abbrev 8
+        CI_COMMIT_BEFORE_SHORT_SHA=$(git log -1  | awk '$1=="Merge:" {print $NF}')
+        echo $CI_COMMIT_BEFORE_SHORT_SHA
+      fi
+    - |
+      echo "Tag image:  ${REGISTRY_DOMAIN}/${GOOGLE_CLOUD_PROJECT_FROM}/${REGISTRY_NAME}/${REGISTRY_IMAGE_PATH}/${IMAGE_NAME}:${CI_COMMIT_BEFORE_SHORT_SHA:-$CI_COMMIT_SHORT_SHA}"
+      echo "To :        ${REGISTRY_DOMAIN}/${GOOGLE_CLOUD_PROJECT_TO}/${REGISTRY_NAME}/${REGISTRY_IMAGE_PATH}/${IMAGE_NAME}:${IMAGE_TAG}"
+    - |
+      gcloud container images add-tag \
+          "${REGISTRY_DOMAIN}/${GOOGLE_CLOUD_PROJECT_FROM}/${REGISTRY_NAME}/${REGISTRY_IMAGE_PATH}/${IMAGE_NAME}:${CI_COMMIT_BEFORE_SHORT_SHA:-$CI_COMMIT_SHORT_SHA}" \
+          "${REGISTRY_DOMAIN}/${GOOGLE_CLOUD_PROJECT_TO}/${REGISTRY_NAME}/${REGISTRY_IMAGE_PATH}/${IMAGE_NAME}:${IMAGE_TAG}" \
+          --quiet
+  tags:
+    - docker

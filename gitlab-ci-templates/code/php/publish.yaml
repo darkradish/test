@@ -1,0 +1,19 @@
+---
+.template:php:publish:gitlab:
+  image: curlimages/curl:latest
+  variables:
+    URL: |
+      $CI_SERVER_PROTOCOL://$CI_SERVER_HOST:$CI_SERVER_PORT/api/v4/projects/$CI_PROJECT_ID/packages/composer
+  script:
+    - |
+      if [ -z "$CI_COMMIT_TAG" ]
+      then
+         version="branch=$CI_COMMIT_REF_NAME"
+      else
+         version="tag=$CI_COMMIT_TAG"
+      fi
+    - |
+      curl -f \
+           --header "Job-Token: $CI_JOB_TOKEN" \
+           --data "$version" \
+           $URL

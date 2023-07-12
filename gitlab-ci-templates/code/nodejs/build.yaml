@@ -1,0 +1,24 @@
+---
+.template:nodejs:build:yarn:
+  image: node:${NODE_VERSION}-${IMAGE_TYPE}
+  interruptible: true
+  variables:
+    NODE_VERSION: lts
+    IMAGE_TYPE: slim
+    YARN_VERSION: lts
+    NODE_ENV: production
+    BUILD_DIR: dist/
+    BUILD_TARGET: ""
+  artifacts:
+    paths:
+      - $BUILD_DIR
+    expire_in: "2 weeks"
+  script:
+    - |
+      build_cmd="build"
+      if [ -n "$BUILD_TARGET" ]; then
+        build_cmd="build:$BUILD_TARGET"
+      fi
+    - yarn --frozen-lockfile $build_cmd
+  tags:
+    - large

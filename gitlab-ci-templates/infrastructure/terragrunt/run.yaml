@@ -1,0 +1,64 @@
+---
+
+.template:terragrunt:init: &template_terragrunt_init
+  image:
+    name: europe-west1-docker.pkg.dev/digital-staging/mdm-docker-registry/bases/ci-tools:terraform-terragrunt
+    pull_policy: always
+  tags:
+    - terraform
+  variables:
+    TF_IN_AUTOMATION: "true"
+    ENVIRONMENT: ${ENVIRONMENT}
+    GOOGLE_PROJECT_ID: ${GOOGLE_PROJECT_ID}
+    TG_TF_REGISTRY_TOKEN: $CI_JOB_TOKEN
+    PLAN: plan.cache
+    PLAN_JSON: plan.json
+    REPORT: tf_report.json
+    TERRAFORM_PLAN_STATE_URL: ${TERRAFORM_PLAN_GSUTIL_LINK}/${CI_PROJECT_NAME}/${CI_JOB_ID}/${PLAN}
+    TF_ROOT: "."  # path to module Terraform managed by Terragrunt
+  before_script:
+    - |  # still useful because some .tf file source module from registry (e.g. module container)
+      cat <<-EOF > ~/.terraformrc
+      credentials "git.maisonsdumonde.net" {
+        token = "${CI_JOB_TOKEN}"
+      }
+      EOF
+    - shopt -s expand_aliases
+    - alias convert_report="jq -r '([.resource_changes[]?.change.actions?]|flatten)|{\"create\":(map(select(.==\"create\"))|length),\"update\":(map(select(.==\"update\"))|length),\"delete\":(map(select(.==\"delete\"))|length)}'"
+    - cd ${TF_ROOT}
+
+.template:terragrunt:run:show-plan:
+  <<: *template_terragrunt_init
+  script:
+    - '[ ! -f terragrunt.hcl ] && exit 0'
+    - terragrunt plan -out=${TF_ROOT}/${PLAN}
+    - terragrunt show -json ${TF_ROOT}/${PLAN} | grep -iv tgenv | convert_report > ${PLAN_JSON}
+    - gsutil cp ${PLAN} ${TERRAFORM_PLAN_STATE_URL}
+    - echo "TERRAFORM_PLAN_STATE_FOLDER_NAME=${CI_JOB_ID}" >> terraform.env
+    - jq -s '.' ${PLAN_JSON} > "${REPORT}"
+    - sum_create=$(jq 'reduce .[].create as $item (0; . + $item)' < "${REPORT}")
+    - sum_update=$(jq 'reduce .[].update as $item (0; . + $item)' < "${REPORT}")
+    - sum_delete=$(jq 'reduce .[].delete as $item (0; . + $item)' < "${REPORT}")
+    - |
+      TF_REPORT=$(jq -n \
+               --arg create "$sum_create" \
+               --arg update "$sum_update" \
+               --arg delete "$sum_delete" \
+               '{create: $create, update: $update, delete: $delete}'
+               )
+    - echo "$TF_REPORT" > "${REPORT}"
+  artifacts:
+    name: plan
+    paths:
+      - ${TF_ROOT}/${PLAN}
+    reports:
+      terraform: ${TF_ROOT}/${REPORT}
+      dotenv: ${TF_ROOT}/terraform.env
+    expire_in: 1 week
+    when: on_success
+
+.template:terragrunt:run:apply:
+  <<: *template_terragrunt_init
+  script:
+    - '[ ! -f terragrunt.hcl ] && exit 0'
+    - terragrunt apply ${TF_ROOT}/${PLAN}

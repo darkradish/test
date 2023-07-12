@@ -1,0 +1,40 @@
+---
+.template:sonarqube:code-analyze:
+  image:
+    name: sonarsource/sonar-scanner-cli:4.6
+  tags:
+    - large
+  variables:
+    SONARQUBE_URL: https://sonarqube.maisonsdumonde.net
+    SEVERITY: INFO
+    GIT_DEPTH: 0
+    SQ_CONFIG_FILE: sonar-project.properties
+    SONARQUBE_EXTRA_OPTS: ""
+  script:
+    - |
+      if [ ! -f "$SQ_CONFIG_FILE" ]
+      then
+        echo "SonarQube configuration file not found."
+        echo "The analysis will be done on ${CI_PROJECT_DIR}."
+      else
+        echo "SonarQube configuration file found!"
+        echo "Using theses values for analysis:"
+        echo "---"
+        cat "$SQ_CONFIG_FILE"
+        echo "---"
+      fi
+    - |
+      sonar-scanner \
+        -Dsonar.host.url="${SONARQUBE_URL}" \
+        -Dsonar.projectKey="${CI_PROJECT_NAME}" \
+        -Dsonar.projectName="${CI_PROJECT_NAME}" \
+        -Dsonar.projectBaseDir="${CI_PROJECT_DIR}" \
+        -Dsonar.login="${SONARQUBE_TOKEN}" \
+        ${SONARQUBE_EXTRA_OPTS}
+    - apk update && apk add curl
+    - SONARQUBE_TOKEN_B64=$(echo -n "$SONARQUBE_TOKEN:" | base64)
+    - |
+      curl -sX POST \
+           -H "Authorization:Basic ${SONARQUBE_TOKEN_B64}" \
+           "$SONARQUBE_URL/api/project_tags/set?project=$CI_PROJECT_NAME&tags=$SONARQUBE_FLAG"
+  interruptible: true

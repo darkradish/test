@@ -1,0 +1,20 @@
+---
+.template:helm:auth:gcs:
+  interruptible: true
+  variables:
+    HELM_GCS_BUCKET: "gs://${DIGITAL_HELM_CHART_REPOSITORY_BUCKET}/repo"
+    HELM_CREDENTIALS: $DIGITAL_HELM_CHART_REPO_CREATOR_KEY
+    HELM_REPO: "mdm"
+    HELM_DIR: "chart/"
+    HELM_GCS_ENABLED: "true"
+  before_script:
+      # This processing  will be deprecated to the GAR solution transition.
+      # This flag enables adding a GCS bucket as a helm repository.
+    - |
+      if [ "${HELM_GCS_ENABLED}" == "true" ]
+      then
+        export GOOGLE_APPLICATION_CREDENTIALS=/tmp/creds.key
+        echo "$HELM_CREDENTIALS" > $GOOGLE_APPLICATION_CREDENTIALS
+        helm repo add $HELM_REPO $HELM_GCS_BUCKET
+        helm repo update
+      fi

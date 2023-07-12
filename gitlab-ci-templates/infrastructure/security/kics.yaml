@@ -1,0 +1,23 @@
+---
+.template:security:kics:
+  image:
+    name: checkmarx/kics:alpine
+    pull_policy: always
+  tags:
+    - large
+  variables:
+    KICS_FAIL_ON: "high,medium"
+    FOLDER_PATH: "."
+    KICS_OPTS: ""
+  before_script:
+    - cd ${FOLDER_PATH}
+  script:
+    - |
+      kics scan --path ${PWD} \
+                --report-formats glsast \
+                --fail-on "$KICS_FAIL_ON" \
+                --output-path ${PWD}/results/ \
+                $KICS_OPTS
+  artifacts:
+    reports:
+      sast: results/gl-sast-results.json

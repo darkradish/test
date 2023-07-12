@@ -1,0 +1,107 @@
+---
+.template:dns:ns1:add:cname:
+  image:
+    name: europe-west1-docker.pkg.dev/digital-staging/mdm-docker-registry/bases/ci-tools:sdk-devops
+    pull_policy: always
+  interruptible: true
+  variables:
+    NS1_ZONE: ""
+    NS1_DOMAIN: ""
+    NS1_ANSWER: ""
+    NS1_API_KEY: ""
+    GIT_STRATEGY: none
+  dependencies: []
+  script:
+    # Test if already exist
+    ## 200: already exist => exit 0
+    ## 404: not found => continue
+    ## other : error
+    - |
+      curl_return=$(curl -s -o /dev/null -I -w '%{http_code}' \
+                 -X GET \
+                 -H "X-NSONE-Key: $NS1_API_KEY" \
+                 https://api.nsone.net/v1/zones/$NS1_ZONE/$NS1_DOMAIN/CNAME || true)
+      case "$curl_return" in
+        "200")
+          echo "already exist"
+          exit 0
+          ;;
+        "404")
+          echo "Not exist, create"
+          ;;
+        *)
+          echo "Error $curl_return"
+          exit $curl_return
+          ;;
+      esac
+    - |
+      data="{
+        \"zone\":\"$NS1_ZONE\",
+        \"domain\":\"$NS1_DOMAIN\",
+        \"type\":\"CNAME\",
+        \"answers\":[{\"answer\":[\"$NS1_ANSWER\"]}]
+        }"
+    - |
+      curl -f \
+           -X PUT \
+           -H "X-NSONE-Key: $NS1_API_KEY" \
+           -d "$(echo $data)" \
+           https://api.nsone.net/v1/zones/$NS1_ZONE/$NS1_DOMAIN/CNAME
+
+.template:dns:ns1:add:cname:digital:review:
+  extends: .template:dns:ns1:add:cname
+  variables:
+    NS1_ZONE: "mdm-staging.com"
+    NS1_DOMAIN: $CI_ENVIRONMENT_SLUG-$CI_PROJECT_NAME.$NS1_ZONE
+    NS1_API_KEY: $DIGITAL_NS1_REVIEW_API_KEY
+  environment:
+    action: prepare
+    name: review/$CI_COMMIT_REF_NAME
+
+# Information : gitlab doesn't support multiple stop jobs
+# use !reference to include it
+.template:dns:ns1:delete:cname:
+  image:
+    name: europe-west1-docker.pkg.dev/digital-staging/mdm-docker-registry/bases/ci-tools:sdk-devops
+    pull_policy: always
+  interruptible: true
+  variables:
+    NS1_ZONE: ""
+    NS1_DOMAIN: ""
+    NS1_API_KEY: ""
+    GIT_STRATEGY: none
+  dependencies: []
+  script:
+    # test if exist
+    - |
+      curl_return=$(curl -s -o /dev/null -I -w "%{http_code}" \
+                 -X GET \
+                 -H "X-NSONE-Key: $NS1_API_KEY" \
+                 https://api.nsone.net/v1/zones/$NS1_ZONE/$NS1_DOMAIN/CNAME || true)
+      case $curl_return in
+        200)
+          echo "Delete it"
+          ;;
+        404)
+          echo "Not exist, exit"
+          exit 0
+          ;;
+        *)
+          echo "Error code $curl_return"
+          exit $curl_return
+      esac
+    - |
+      curl -f \
+           -X DELETE \
+           -H "X-NSONE-Key: $NS1_API_KEY" \
+           https://api.nsone.net/v1/zones/$NS1_ZONE/$NS1_DOMAIN/CNAME
+
+.template:dns:ns1:delete:cname:digital:review:
+  extends: .template:dns:ns1:delete:cname
+  variables:
+    NS1_ZONE: "mdm-staging.com"
+    NS1_DOMAIN: $CI_ENVIRONMENT_SLUG-$CI_PROJECT_NAME.$NS1_ZONE
+    NS1_API_KEY: $DIGITAL_NS1_REVIEW_API_KEY
+  environment:
+    action: prepare
+    name: review/$CI_COMMIT_REF_NAME

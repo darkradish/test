@@ -1,0 +1,53 @@
+---
+
+.template:python:test:pylint:
+  image: python:${PYTHON_VERSION}-slim
+  interruptible: true
+  variables:
+    PYTHON_VERSION: "3.9"
+    PYTHON_SCRIPTS_FOLDER: "./"
+    PYLINT_SCORE_MIN: 9
+    PYTHONUSERBASE: ./.python
+  script:
+    - export PATH=${PYTHONUSERBASE}/bin:$PATH
+    - pip install --disable-pip-version-check -q pylint-gitlab
+    - |
+      pylint --fail-under=$PYLINT_SCORE_MIN \
+            --output-format=pylint_gitlab.GitlabCodeClimateReporter \
+            $(find ${PYTHON_SCRIPTS_FOLDER} ! -path "$PYTHONUSERBASE/*" -name "*.py") > codeclimate.json
+  artifacts:
+    reports:
+      codequality: codeclimate.json
+
+.template:python:test:unittests:
+  image: python:${PYTHON_VERSION}-slim
+  interruptible: true
+  variables:
+    PYTHON_VERSION: "3.9"
+    PYTHON_SCRIPTS_FOLDER: "./"
+    PYTHONUSERBASE: ./.python
+  script:
+    - python -m xmlrunner discover --output-file test-junits.xml
+  artifacts:
+    when: always
+    paths:
+      - test-junits.xml
+    reports:
+      junit: test-junits.xml
+
+.template:python:test:coverage:
+  image: python:${PYTHON_VERSION}-slim
+  interruptible: true
+  variables:
+    PYTHON_VERSION: "3.9"
+    PYTHON_SCRIPTS_FOLDER: "./"
+    PYTHONUSERBASE: ./.python
+  script:
+    - pip install coverage
+    - coverage erase
+    - coverage run -m unittest discover
+    - coverage xml -i
+  artifacts:
+    when: always
+    paths:
+      - coverage.xml

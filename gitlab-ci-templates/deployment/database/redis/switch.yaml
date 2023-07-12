@@ -1,0 +1,36 @@
+---
+.template:database:redis:switch:
+  script:
+    - |
+      get_current_db(){
+        CURR_CACHE_BACKEND_DB="$(helm get values "$CI_ENVIRONMENT_SLUG" -o json | jq -r '.redis.database.backend')"
+        CURR_PAGE_CACHE_DB="$(helm get values "$CI_ENVIRONMENT_SLUG" -o json | jq -r '.redis.database.fpc')"
+      }
+
+      get_helm_status(){
+        helm status "$CI_ENVIRONMENT_SLUG" -o json 2> /dev/null | jq -r '.info.status' || echo "new"
+      }
+
+      # Set database redis:
+      # if healthy deployed, switch db
+      # else give latest db
+      case $(get_helm_status) in
+        "new")
+          CACHE_BACKEND_DB=1
+          PAGE_CACHE_DB=2
+          ;;
+        "deployed")
+          get_current_db
+          [ $CURR_CACHE_BACKEND_DB -eq 1 ] && CACHE_BACKEND_DB=4 || CACHE_BACKEND_DB=1
+          [ $CURR_PAGE_CACHE_DB -eq 2 ] && PAGE_CACHE_DB=5 || PAGE_CACHE_DB=2
+          ;;
+        *)
+          get_current_db
+          CACHE_BACKEND_DB="$CURR_CACHE_BACKEND_DB"
+          PAGE_CACHE_DB="$CURR_PAGE_CACHE_DB"
+          ;;
+      esac
+
+      # Variable source
+      echo "Redis backend set to be on database: $CACHE_BACKEND_DB"
+      echo "Redis fpc set to be on database: $PAGE_CACHE_DB"

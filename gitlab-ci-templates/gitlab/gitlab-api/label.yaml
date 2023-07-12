@@ -1,0 +1,62 @@
+---
+
+include:
+  - local: gitlab/gitlab-api/env.yaml
+
+.template:gitlab-api:label:get-branches:
+  variables:
+    PROJECTS_URL_SRC: ""
+  before_script:
+    - |
+      function get_branch_from_label()
+      {
+        local project=$1
+        local project_branch
+
+        IFS=","
+        for label in $CI_MERGE_REQUEST_LABELS;
+        do
+            [[ "$label" =~ ${project^^}:: ]] && project_branch=${label##*:}
+        done
+        unset IFS
+
+        [ -n "${project_branch}" ] && echo "$project_branch"
+      }
+
+.template:gitlab-api:label:get-urls:
+  script:
+    - !reference [".template:gitlab-api:env:get-url:branch", "before_script"]
+    - |
+      if [ -z "$projects_branch" ]; then
+        declare -A projects_branch
+      fi
+    - |
+      for PROJECT in $PROJECTS_URL_SRC;
+      do
+        branch_label=$(get_branch_from_label "$PROJECT") || branch_label=""
+        if [ -n "$branch_label" ]
+        then
+          projects_branch[$PROJECT]=$branch_label
+          echo "$PROJECT: Labels contains ${projects_branch[$PROJECT]} branch name"
+          get_url "$PROJECT" "${projects_branch[$PROJECT]}"
+          urls_list[$PROJECT]="$env_url"
+        else
+          echo "$PROJECT: Labels doesn't contains project branch name, skipping..."
+        fi
+      done
+
+.template:gitlab-api:label:get-review-env:
+  script:
+    - |
+      IFS=","
+      for label in $CI_MERGE_REQUEST_LABELS;
+      do
+          if [[ "$label" =~ REVIEW_ENV:: ]]
+          then
+            RELEASE_ENV_TYPE=review-${label##*:}
+            [ ! -f chart/values-${RELEASE_ENV_TYPE}.yaml ]&& \
+              echo "[ERROR] chart/values-${RELEASE_ENV_TYPE}.yaml not found" && exit 1
+            break
+          fi
+      done
+      unset IFS

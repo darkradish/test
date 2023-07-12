@@ -1,0 +1,25 @@
+---
+.template:java:spring-boot-package:maven:
+  image: maven:${MAVEN_IMAGE_TAG}
+  interruptible: true
+  variables:
+    MAVEN_IMAGE_TAG: 3.6-openjdk-17-slim
+    MAVEN_OPTS: ""
+  script:
+    # Maven will run the jar plugin's jar goal & spring-boot plugin's jar repackage
+    # One maven instruction to avoid replaying all the goals associated with the package phase
+    - |
+      mvn -s ${MAVEN_SETTINGS} \
+          -B jar:jar spring-boot:repackage \
+          ${MAVEN_OPTS}
+
+    - ls -1 target/*jar*
+  artifacts:
+    paths:
+      - target/*.jar
+    expire_in: '1 month'
+  cache:
+    paths:
+      - .m2
+  tags:
+    - large

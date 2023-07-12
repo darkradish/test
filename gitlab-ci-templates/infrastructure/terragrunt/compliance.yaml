@@ -1,0 +1,31 @@
+---
+
+include:
+  - '//infrastructure/terragrunt/run.yaml'
+
+.template:terragrunt:compliance:fmt:
+  image:
+    name: europe-west1-docker.pkg.dev/digital-staging/mdm-docker-registry/bases/ci-tools:terraform-terragrunt
+    pull_policy: always
+  before_script: !reference [".template:terragrunt:run:show-plan", "before_script"]
+  script:
+    - '[ ! -f terragrunt.hcl ] && exit 0'
+    - terragrunt hclfmt --terragrunt-check
+  tags:
+    - terraform
+
+.template:terragrunt:compliance:validate:
+  image:
+    name: europe-west1-docker.pkg.dev/digital-staging/mdm-docker-registry/bases/ci-tools:terraform-terragrunt
+    pull_policy: always
+  variables:
+    TG_TF_REGISTRY_TOKEN: $CI_JOB_TOKEN
+    TF_IN_AUTOMATION: "true"
+  before_script: !reference [".template:terragrunt:run:show-plan", "before_script"]
+  script:
+    - '[ ! -f terragrunt.hcl ] && exit 0'
+    - terragrunt -version
+    - terraform -version
+    - terragrunt validate --terragrunt-non-interactive
+  tags:
+    - terraform

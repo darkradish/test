@@ -1,0 +1,9 @@
+---
+
+# Lint for yaml
+.template:gitlab-ci:yamllint:
+    stage: Test
+    image:
+        name: cytopia/yamllint
+    script:
+        - yamllint -f colored .

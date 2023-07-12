@@ -1,0 +1,9 @@
+---
+
+.templates:docker:auth:credential:
+  script:
+    - apk update && apk add --no-cache tar gzip
+    - >
+      VERSION=2.1.6 && OS=linux && ARCH=amd64 && wget -qO- "https://github.com/GoogleCloudPlatform/docker-credential-gcr/releases/download/v${VERSION}/docker-credential-gcr_${OS}_${ARCH}-${VERSION}.tar.gz"
+      | tar xz docker-credential-gcr && chmod +x docker-credential-gcr && mv docker-credential-gcr /usr/bin/
+    - docker-credential-gcr configure-docker --registries=${DOCKER_REGISTRY}

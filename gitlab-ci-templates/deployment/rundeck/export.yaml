@@ -1,0 +1,512 @@
+---
+.template:rundeck:export:
+  script:
+    - |
+      if [ "${RUNDECK_EXPORT}" == "true" ]; then
+        declare -r RUNDECK_API_VERSION=38
+        declare -r RUNDECK_KUBE_TEMPLATE_PROJECT_NAME='Templates'
+        declare -r CRONJOBS_CHART_TEMPLATES_FOLDER='templates/cronjobs'
+
+        rundeck_check_environment_config() {
+          if [ -z "${RUNDECK_PROJECT_NAME:-}" ]; then
+            echo "You forgot to specify the RUNDECK_PROJECT_NAME variable in your .gitlab-ci.yml. It's not going to work until you do."
+            echo "The RUNDECK_PROJECT_NAME sould be the rundeck project name where the jobs will be exported"
+            exit 1
+          fi
+
+          if [ -z "${RUNDECK_API_TOKEN:-}" ]; then
+            echo "You forgot to specify the RUNDECK_API_TOKEN variable in your .gitlab-ci.yml. Contact Team DevOps :)"
+            exit 1
+          fi
+        }
+
+        get_kube_job_template() {
+          local jobName="kubernetes-cron-job-template-2.0.0"
+
+          curl -sX GET \
+              "$RUNDECK_API_URL/$RUNDECK_API_VERSION/project/$RUNDECK_KUBE_TEMPLATE_PROJECT_NAME/jobs/export?jobExactFilter=$jobName" \
+              -H "X-Rundeck-Auth-Token: $RUNDECK_API_TOKEN" \
+              -H "Content-Type: text/xml;charset=utf-8"
+        }
+
+        # Check if the given job exist in the given Rundeck project
+        check_if_job_exist() {
+          local rundeckProjectName="${1:-}"
+          local rundeckJobName="${2:-}"
+          local content
+
+          if [ -z "${rundeckProjectName}" ]; then
+            echo "Parameter 1: Name of the rundeck project where you want to export jobs"
+            exit 1
+          fi
+
+          if [ -z "${rundeckJobName}" ]; then
+            echo "Parameter 2: Name of the rundeck job"
+            exit 1
+          fi
+
+          content=$(curl -sX GET \
+          "$RUNDECK_API_URL/$RUNDECK_API_VERSION/project/$rundeckProjectName/jobs/export?jobExactFilter=$rundeckJobName" \
+          -H "X-Rundeck-Auth-Token: $RUNDECK_API_TOKEN" \
+          -H "Content-Type: text/xml;charset=utf-8")
+
+          if [ "$content" != "<joblist />" ];then
+            return 1
+          fi
+        }
+
+        # Create a rundeck job by removing the UUID
+        # If the job already exist it will be updated
+        create_rundeck_job() {
+          local rundeckProjectName="${1:-}"
+          local jobContent="${2:-}"
+          local result postHasFailed
+
+          if [ -z "${rundeckProjectName}" ]; then
+            echo "Parameter 1: Name of the rundeck project where you want to export jobs"
+            exit 1
+          fi
+
+          if [ -z "${jobContent}" ]; then
+            echo "Parameter 2: The job content (xml format)"
+            exit 1
+          fi
+
+          result=$(curl -X POST \
+          "$RUNDECK_API_URL/$RUNDECK_API_VERSION/project/$rundeckProjectName/jobs/import?uuidOption=remove&dupeOption=update" \
+          -H "X-Rundeck-Auth-Token: $RUNDECK_API_TOKEN" \
+          -H "Content-Type: application/xml;charset=utf-8" \
+          -d "$jobContent")
+
+          postHasFailed=$(echo "$result" | xmlstarlet sel -t -m "//result/failed[@count]" -v @count)
+          echo "$result"
+
+          if [[ "$postHasFailed" != 0 ]]; then
+            echo "POST failed"
+            exit 1
+          fi
+        }
+
+        # Overload template with the job informations
+        generate_rundeck_job_from_kube_template() {
+          local kubeJobName="${1:-}"
+          local rundeckJobName="${2:-}"
+          local template="${3:-}"
+          local kubeJobContent="${4:-}"
+
+          if [ -z "${kubeJobName}" ]; then
+            echo "Parameter 1: Name of the kubernetes job"
+            exit 1
+          fi
+
+          if [ -z "${rundeckJobName}" ]; then
+            echo "Parameter 2: Name of the rundeck job"
+            exit 1
+          fi
+
+          if [ -z "${template}" ]; then
+            echo "Parameter 3: The rundeck kubernetes job template (xml format)"
+            exit 1
+          fi
+
+          if [ -z "${kubeJobContent}" ]; then
+            echo "Parameter 4: The kubernetes job definition (yaml format)"
+            exit 1
+          fi
+
+          echo "$template" |
+          xmlstarlet fo |
+          xmlstarlet ed -u "//options/option[@name=\"jobName\"]/@value" -v "$kubeJobName" |
+          xmlstarlet ed -u "//joblist/job/name" -v "$rundeckJobName" |
+          xmlstarlet ed -u "//joblist/job/description" -v "[AUTO-GENERATED]" |
+          xmlstarlet ed -u "//command/node-step-plugin[@type=\"Kubernetes-Create\"]/configuration/entry[@key=\"yaml\"]/@value" \
+            -v "$kubeJobContent"
+        }
+
+        generate_rundeck_job_schedule() {
+          local scheduleConfig="${1:-}"
+
+          if [ -z "${scheduleConfig}" ]; then
+            echo "Parameter 1: Cron expression"
+            exit 1
+          fi
+
+          IFS=' ' # space is set as delimiter
+          read -ra ADDR <<< "$scheduleConfig" # scheduleConfig is read into an array as tokens separated by IFS
+
+          local second=${ADDR[0]}
+          local minute=${ADDR[1]}
+          local hour=${ADDR[2]}
+          local dayMonth=${ADDR[3]}
+          local month=${ADDR[4]}
+          local dayWeek=${ADDR[5]}
+          local year=${ADDR[6]}
+          local scheduleXml
+
+          printf -v scheduleXml "<time hour='%s' minute='%s' seconds='%s' /><year year='%s' />" "$hour" "$minute" "$second" "$year"
+          if [ "${dayMonth}" = "?" ];then
+            printf -v scheduleXml "%s<month month='%s' /><weekday day='%s' />" "$scheduleXml" "$month" "$dayWeek"
+          elif [ "${dayWeek}" = "?" ]; then
+            printf -v scheduleXml "%s<month day='%s' month='%s' /><dayofmonth />" "$scheduleXml" "$dayMonth" "$month"
+          fi
+
+          echo "$scheduleXml"
+        }
+
+        generate_rundeck_job_option() {
+          local optionConfig="${1:-}"
+          local optionArguments=""
+          local optionChildren=""
+          local optionXml=""
+
+          if [ -z "${optionConfig}" ]; then
+            echo "Parameter 1: Option configutation"
+            exit 1
+          fi
+
+          if ! options_requirements "$optionConfig"; then
+            exit 1
+          fi
+
+          # "keys" corresponds to the Rundeck options that can be used
+          # More details: https://docs.rundeck.com/docs/manual/document-format-reference/job-v20.html#context
+          local keys=("name" "value" "required" "delimiter" "multivalued" "values" "enforcedvalues" "isDate" "dateFormat")
+          for key in "${keys[@]}"; do
+            if option_exist_and_not_null "$optionConfig" "$key"; then
+              local optionValue
+              optionValue=$(get_option_value "$optionConfig" "$key")
+              printf -v optionArguments "%s $key='%s'" "$optionArguments" "$optionValue"
+
+              if [[ "$key" == "enforcedvalues" ]]; then
+                printf -v optionArguments "%s valuesListDelimiter=','" "$optionArguments"
+              fi
+            fi
+          done
+
+          keys=("label" "description")
+          for key in "${keys[@]}"; do
+            if option_exist_and_not_null "$optionConfig" "$key"; then
+              local optionChild
+              optionChild=$(get_option_value "$optionConfig" "$key")
+              printf -v optionChildren "%s <$key>%s</$key>" "$optionChildren" "$optionChild"
+            fi
+          done
+
+          printf -v optionXml "<option %s>%s</option>" "$optionArguments" "$optionChildren"
+
+          echo "$optionXml"
+        }
+
+        # Check if the options configuration is valid
+        options_requirements() {
+          local optionConfig="${1:-}"
+          local code=0
+
+          if [ -z "${optionConfig}" ]; then
+            echo "Parameter 1: Option configutation"
+            exit 1
+          fi
+
+          if ! option_exist_and_not_null "$optionConfig" "name"; then
+            echo "Option 'name' should be set."
+            code=1
+          fi
+
+          if option_is_true "$optionConfig" "required"; then
+            if ! option_exist_and_not_null "$optionConfig" "value"; then
+              echo "Option 'value' should be set."
+              code=1
+            fi
+          fi
+
+          if option_is_true "$optionConfig" "enforcedvalues"; then
+            if ! option_exist_and_not_null "$optionConfig" "values"; then
+              echo "Option 'values' should be set."
+              code=1
+            fi
+          fi
+
+          if option_is_true "$optionConfig" "multivalued"; then
+            if ! option_exist_and_not_null "$optionConfig" "delimiter"; then
+              echo "Option 'delimiter' should be set."
+              code=1
+            fi
+          fi
+
+          return "${code}"
+        }
+
+        # Check if the option value is true
+        option_is_true() {
+          local optionConfig="${1:-}"
+          local key="${2:-}"
+
+          if [ -z "${optionConfig}" ]; then
+            echo "Parameter 1: Option configutation"
+            exit 1
+          fi
+
+          if [ -z "${key}" ]; then
+            echo "Parameter 1: Option name"
+            exit 1
+          fi
+
+          if [[ $(echo "$optionConfig" | jq ."${key}") != true ]]; then
+            return 1
+          fi
+        }
+
+        # Check if the option is defined and not null
+        option_exist_and_not_null(){
+          local optionConfig="${1:-}"
+          local key="${2:-}"
+
+          if ! echo "$optionConfig" | jq -e ."${key}"; then
+            return 1
+          fi > /dev/null
+        }
+
+        # Get the option value
+        get_option_value() {
+          local optionConfig="${1:-}"
+          local key="${2:-}"
+
+          if [ -z "${optionConfig}" ]; then
+            echo "Parameter 1: Option configutation"
+            exit 1
+          fi
+
+          if [ -z "${key}" ]; then
+            echo "Parameter 1: Option name"
+            exit 1
+          fi
+
+          echo "$optionConfig" | jq -r ."${key}"
+        }
+
+        # Add schedule node to the Rundeck XML job template
+        get_rundeck_job_template_with_schedule() {
+          local scheduleConfig="${1:-}"
+          local scheduleEnabled="${2:-}"
+          local templateFile="${3:-}"
+          local scheduleNodeContent
+
+          if [ -z "${scheduleConfig}" ]; then
+            echo "Parameter 1: Cron expression"
+            exit 1
+          fi
+
+          if [ -z "${scheduleEnabled}" ]; then
+            echo "Parameter 2: Is schedule enabled ? (boolean)"
+            exit 1
+          fi
+
+          if [ -z "${templateFile}" ]; then
+            echo "Parameter 3: The rundeck kubernetes job template file"
+            exit 1
+          fi
+
+          scheduleNodeContent=$(generate_rundeck_job_schedule "$scheduleConfig")
+
+          xmlstarlet ed -d "//joblist/job/schedule" "$templateFile" |
+          xmlstarlet ed -P -s "//joblist/job" -t elem -n "schedule" -v "$scheduleNodeContent" |
+          xmlstarlet ed -u "//joblist/job/scheduleEnabled" -v "$scheduleEnabled" |
+          xmlstarlet unesc |
+          xmlstarlet format
+        }
+
+        # Add options node to the Rundeck XML job template
+        get_rundeck_job_template_with_options() {
+          local optionsConfig="${1:-}"
+          local templateFile="${2:-}"
+          local optionsNodeContent=""
+
+          if [ -z "${optionsConfig}" ]; then
+            echo "Parameter 1: Cron expression"
+            exit 1
+          fi
+
+          if [ -z "${templateFile}" ]; then
+            echo "Parameter 2: The rundeck kubernetes job template file"
+            exit 1
+          fi
+
+          while read -r option; do
+            optionNodeContent="$(generate_rundeck_job_option "$option")"
+            if [ ! "${optionNodeContent}" ]; then
+              exit 1
+            fi
+
+            printf -v optionsNodeContent "%s%s" "$optionsNodeContent" "$optionNodeContent"
+          done < <(echo "${optionsConfig}" | jq -c .[])
+
+          echo "$templateFile" | sed -r "\#</options>#i\ \t$optionsNodeContent"
+        }
+
+        get_rundeck_job_template_with_retry() {
+          local rundeckJobRetry="${1:-}"
+          local jobContent="${2:-}"
+
+          if [ -z "${rundeckJobRetry}" ]; then
+            echo "Parameter 1: The rundeck job number of retry"
+            exit 1
+          fi
+
+          if [ -z "${jobContent}" ]; then
+            echo "Parameter 2: The job content (xml format)"
+            exit 1
+          fi
+
+          echo "$jobContent" |
+          xmlstarlet ed -u "//options/option[@name=\"rundeckRetry\"]/@value" -v "$rundeckJobRetry" |
+          xmlstarlet unesc |
+          xmlstarlet format
+        }
+
+        get_rundeck_job_template_with_timeout() {
+          local jobTimeout="${1:-}"
+          local jobContent="${2:-}"
+          local rundeckDelayTimeout=60
+
+          if [ -z "${jobTimeout}" ]; then
+            echo "Parameter 1: The job timeout (in seconds)"
+            exit 1
+          fi
+
+          if [ -z "${jobContent}" ]; then
+            echo "Parameter 2: The job content (xml format)"
+            exit 1
+          fi
+
+          waitForSleep=$(echo "$jobContent" | xmlstarlet sel -t -m "//options/option[@name=\"waitForSleep\"]" -v @value);
+          waitForRetries=$(echo "(($jobTimeout + $rundeckDelayTimeout)/$waitForSleep)" | bc)
+
+          echo "$jobContent" |
+          xmlstarlet ed -u "//options/option[@name=\"waitForRetries\"]/@value" -v "$waitForRetries" |
+          xmlstarlet unesc |
+          xmlstarlet format
+        }
+
+        helm_template_specific_file() {
+          local filePath="${1:-}"
+
+          if [ -z "${filePath}" ]; then
+            echo "Parameter 1: Path of the helm chart definition"
+            exit 1
+          fi
+
+          # Skip "$filePath" the first parameter of "$@"
+          shift
+
+          export RELEASE_NAME="${RELEASE_NAME:-${CI_ENVIRONMENT_SLUG}}"
+
+          HELM_VALUES="${HELM_DIR}/values.yaml"
+          if [ -f ${HELM_DIR}/values-${RELEASE_ENV_TYPE}.yaml ]
+          then
+            HELM_VALUES="${HELM_VALUES},${HELM_DIR}/values-${RELEASE_ENV_TYPE}.yaml"
+          fi
+
+          helm template "$RELEASE_NAME" "$HELM_DIR" \
+            --namespace "${KUBE_NAMESPACE}" \
+            --show-only "$filePath" \
+            --set global.gcp.projectId="$GOOGLE_PROJECT_ID" \
+            --set global.environment.path="$CI_PROJECT_PATH_SLUG" \
+            --set global.environment.reference="$CI_COMMIT_REF_SLUG" \
+            --set global.environment.type="$RELEASE_NAME" \
+            --set-string global.image.tag="${IMAGE_TAG:-$CI_COMMIT_SHORT_SHA}" \
+            -f "$HELM_VALUES" \
+            --set "$@"
+        }
+
+        # Export cronjobs to Rundeck
+        export_cronjob_to_rundeck() {
+          local kubeJobTemplateFile="/tmp/rundeck-kube-job-template.xml"
+          local kubeJobFile="/tmp/rundeck-kube-job.yaml"
+          local filename kubeJobName jobContent scheduleConfig kubeJobTemplate generatedJob
+
+          filename=$(basename "$file")
+          local rundeckJobName=${filename%.*}
+          local filePath="${CRONJOBS_CHART_TEMPLATES_FOLDER}/${filename}"
+
+          echo "Generate chart template for \"$file\"..."
+
+          # Skip "$file" the first parameter of "$@"
+          shift
+          helm_template_specific_file "$filePath" "$@" > $kubeJobFile
+
+          cat $kubeJobFile
+
+          kubeJobName="$(yq eval .metadata.name $kubeJobFile)"
+          rundeckJobRetry="$(yq eval .data.jobRetry $kubeJobFile)"
+          rundeckJobTimeout="$(yq eval .spec.activeDeadlineSeconds $kubeJobFile)"
+          jobContent=$(cat $kubeJobFile)
+          kubeJobTemplate=$(cat $kubeJobTemplateFile)
+          scheduleEnabled="$(yq eval .data.jobScheduleEnabled $kubeJobFile)"
+          scheduleEnabled="${scheduleEnabled:=true}"
+          scheduleConfig="$(yq eval .data.jobSchedule $kubeJobFile)"
+          optionsConfig="$(yq eval --prettyPrint .data.jobOptions -j $kubeJobFile)"
+
+          if [ -z "$kubeJobName" ]; then
+            echo "No job found in chart template. Skipping."
+            return 1
+          fi
+
+          if ! check_if_job_exist "$RUNDECK_PROJECT_NAME" "$rundeckJobName"; then
+            echo "\"$rundeckJobName\" job already exist on Rundeck  \"$RUNDECK_PROJECT_NAME\" project. Let's update it!"
+          else
+            echo "\"$rundeckJobName\" job doesn't exist on Rundeck  \"$RUNDECK_PROJECT_NAME\" project. Let's add it to the flow!"
+          fi
+
+          echo "Format rundeck job from kube template..."
+          if [ "$scheduleConfig" != "null" ]; then
+            kubeJobTemplate=$(get_rundeck_job_template_with_schedule "$scheduleConfig" "$scheduleEnabled" "$kubeJobTemplateFile")
+          fi
+
+          if [ "$optionsConfig" != "null" ]; then
+            kubeJobTemplate=$(get_rundeck_job_template_with_options "$optionsConfig" "$kubeJobTemplate")
+          fi
+
+          if [ "$rundeckJobRetry" != "null" ]; then
+            kubeJobTemplate=$(get_rundeck_job_template_with_retry "$rundeckJobRetry" "$kubeJobTemplate")
+          fi
+
+          if [ "$rundeckJobTimeout" != "null" ]; then
+            kubeJobTemplate=$(get_rundeck_job_template_with_timeout "$rundeckJobTimeout" "$kubeJobTemplate")
+          fi
+
+          generatedJob="$(generate_rundeck_job_from_kube_template "$kubeJobName" "$rundeckJobName" "$kubeJobTemplate" "$jobContent")"
+          echo "Exporting job to Rundeck..."
+          create_rundeck_job "$RUNDECK_PROJECT_NAME" "$generatedJob"
+        }
+
+        # Browse cronjobs folder and export cronjobs to Rundeck
+        export_cronjobs() {
+          local CRONJOBS_CHART_TEMPLATES_FOLDER_PATH="${HELM_DIR:-}/$CRONJOBS_CHART_TEMPLATES_FOLDER"
+          local kubeJobTemplateFile="/tmp/rundeck-kube-job-template.xml"
+
+          rundeck_check_environment_config
+
+          echo "Download Kube job template from Rundeck and store it in a temporary file"
+          get_kube_job_template > $kubeJobTemplateFile
+
+          if [ ! -d "$CRONJOBS_CHART_TEMPLATES_FOLDER_PATH" ];then
+              echo "No jobs to export."
+              exit 0
+          fi
+
+          if [ -z "$(ls -A "$CRONJOBS_CHART_TEMPLATES_FOLDER_PATH" 2>&1)" ];then
+              echo "\"$CRONJOBS_CHART_TEMPLATES_FOLDER_PATH\" is empty. No jobs to export."
+              exit 0
+          fi
+
+          echo "Starting browse of \"$CRONJOBS_CHART_TEMPLATES_FOLDER_PATH\" folder"
+
+          for file in "$CRONJOBS_CHART_TEMPLATES_FOLDER_PATH"/*.yaml; do
+            export_cronjob_to_rundeck "$file" "$@"
+          done
+
+          echo "Finished browse of \"$CRONJOBS_CHART_TEMPLATES_FOLDER_PATH\" folder."
+        }
+
+        echo "rundeck script loaded!"
+      fi

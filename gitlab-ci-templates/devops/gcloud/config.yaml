@@ -1,0 +1,25 @@
+---
+.template:gcloud:config:set-project:
+  image:
+    name: europe-west1-docker.pkg.dev/digital-staging/mdm-docker-registry/bases/ci-tools:sdk-devops
+    pull_policy: always
+  variables:
+    GOOGLE_PROJECT_ID: ""
+  script:
+    - |
+      if [ -z "${GOOGLE_PROJECT_ID}" ]; then
+        echo "No Google Project ID provided."
+        exit 1
+      fi
+    - gcloud config set project $GOOGLE_PROJECT_ID
+
+.template:gcloud:config:auth:
+  image:
+    name: europe-west1-docker.pkg.dev/digital-staging/mdm-docker-registry/bases/ci-tools:sdk-devops
+    pull_policy: always
+  variables:
+    GCLOUD_KEY: ""
+  script:
+    - |
+      gcloud auth activate-service-account \
+        --key-file <( echo "$GCLOUD_KEY" )

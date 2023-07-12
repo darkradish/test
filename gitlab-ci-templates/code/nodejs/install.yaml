@@ -1,0 +1,27 @@
+---
+.template:nodejs:install:yarn:
+    image: node:${NODE_VERSION}-${IMAGE_TYPE}
+    interruptible: true
+    variables:
+        NODE_VERSION: lts
+        IMAGE_TYPE: slim
+        YARN_VERSION: lts
+        NODE_ENV: development
+    artifacts:
+        paths:
+            - node_modules/
+            - src/.next
+        expire_in: '2 weeks'
+    cache:
+        key:
+            files:
+                - yarn.lock
+            prefix: $NODE_ENV
+        paths:
+            - .yarn_cache
+            - src/.next/cache
+    script:
+        - '[ -f .npmrc.dist ]&& mv .npmrc.dist .npmrc'
+        - yarn install --cache-folder .yarn_cache/ --frozen-lockfile
+    tags:
+        - large

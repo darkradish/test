@@ -1,0 +1,17 @@
+---
+
+.template:kubectl:clean:objects:
+  script:
+    - |
+      for obj in deploy service secret virtualservice configmaps hpa pdb jobs pvc
+      do
+        kube_obj_list=$(kubectl get $obj -o custom-columns=:.metadata.name \
+                                        -l app.kubernetes.io/instance="${CI_ENVIRONMENT_SLUG}",app.kubernetes.io/component!=cron \
+                                        --namespace "${KUBE_NAMESPACE}")
+        if [ -n "${kube_obj_list}" ];then
+          kubectl delete $obj \
+            $kube_obj_list \
+            --namespace "${KUBE_NAMESPACE}"
+          echo "All $(echo -n "$kube_obj_list" | wc -l) $obj from ${CI_ENVIRONMENT_SLUG} release have been removed."
+        fi
+      done

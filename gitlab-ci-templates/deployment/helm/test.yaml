@@ -1,0 +1,58 @@
+---
+
+include:
+  - local: deployment/helm/setup.yaml
+
+.template:helm:test:lint:simple:
+  interruptible: true
+  image:
+    name: europe-west1-docker.pkg.dev/digital-staging/mdm-docker-registry/bases/ci-tools:sdk-devops
+    pull_policy: always
+  variables:
+    HELM_OPTS: ""
+    HELM_SEARCH: "true"
+    HELM_SEARCH_MAXDEPTH: "2"
+    HELM_DIRS: ""
+  script:
+    - |
+      if [ "$HELM_SEARCH" == "true" ]; then
+        HELM_DIRS=$( \
+          find . -maxdepth $HELM_SEARCH_MAXDEPTH -mindepth 1 \
+          -type f -name Chart.yaml -exec dirname {} \; )
+      fi
+    - helm lint $HELM_DIRS $HELM_OPTS
+
+.template:helm:test:lint:
+  extends: .template:helm:setup
+  interruptible: true
+  variables:
+    HELM_OPTS: ""
+    HELM_SEARCH:
+      !reference [".template:helm:test:lint:simple", "variables", "HELM_SEARCH"]
+    HELM_SEARCH_MAXDEPTH:
+      !reference [
+        ".template:helm:test:lint:simple",
+        "variables",
+        "HELM_SEARCH_MAXDEPTH",
+      ]
+    HELM_DIRS: ""
+  script:
+    - !reference [".template:helm:test:lint:simple", "script"]
+
+.template:helm:test:render-template:
+  extends: .template:helm:setup
+  interruptible: true
+  script:
+    - |
+      if [ -n "$HELM_ENV_VALUES_FILE" ]
+      then
+        HELM_OPT="$HELM_OPT -f $HELM_DIR/$HELM_ENV_VALUES_FILE"
+      fi
+    - helm template test $HELM_DIR -f $HELM_DIR/values.yaml $HELM_OPT --debug
+  parallel:
+    matrix:
+      - HELM_ENV_VALUES_FILE:
+          - values-staging.yaml
+          - values-review.yaml
+          - values-preproduction.yaml
+          - values-production.yaml

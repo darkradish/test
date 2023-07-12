@@ -1,0 +1,24 @@
+---
+include:
+  - local: deployment/helm/auth.yaml
+
+.template:helm:setup:
+  image:
+    name: europe-west1-docker.pkg.dev/digital-staging/mdm-docker-registry/bases/ci-tools:sdk-devops
+    pull_policy: always
+  variables:
+    HELM_CREDENTIALS:
+      !reference [".template:helm:auth:gcs", "variables", "HELM_CREDENTIALS"]
+    HELM_REPO: "mdm"
+    HELM_DIR: "chart"
+    HELM_GCS_BUCKET:
+      !reference [".template:helm:auth:gcs", "variables", "HELM_GCS_BUCKET"]
+    HELM_EXTRA_REPOS: ""  # ex: prometheus-community,https://prometheus-community.github.io/helm-charts
+  before_script:
+    - !reference [".template:helm:auth:gcs", "before_script"]
+    - |
+      for repo in $HELM_EXTRA_REPOS
+      do
+        helm repo add $(echo $repo | sed 's/,/ /' )
+      done
+    - helm dependencies build $HELM_DIR || echo "No dependencies to install"

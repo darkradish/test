@@ -1,0 +1,14 @@
+---
+
+.template:kubectl:job:delete:
+  script:
+    - |
+      kube_job_list=$(kubectl get jobs -o custom-columns=:.metadata.name \
+                                      -l app.mdm.xm/environment="${CI_ENVIRONMENT_SLUG}",app.kubernetes.io/component!=cron \
+                                      --namespace "${KUBE_NAMESPACE}")
+      if [ -n "${kube_job_list}" ];then
+        kubectl delete jobs \
+          $kube_job_list \
+          --namespace "${KUBE_NAMESPACE}"
+        echo "All $(echo -n "$kube_job_list" | wc -l) jobs from ${CI_ENVIRONMENT_SLUG} release have been removed."
+      fi

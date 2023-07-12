@@ -1,0 +1,55 @@
+---
+.template:nodejs:test:audit:
+    image: node:${NODE_VERSION}-${IMAGE_TYPE}
+    interruptible: true
+    variables:
+        NODE_VERSION: lts
+        IMAGE_TYPE: slim
+        NODE_ENV: development
+        AUDIT_LEVEL: LOW
+    artifacts:
+        paths:
+            - yarn-reports.txt
+        expire_in: '14 days'
+        when: always
+    script:
+        # add better audi for yarn
+        - yarn global add improved-yarn-audit
+        - 'echo "> Running audit on npm packages"'
+        - |
+            /usr/local/bin/improved-yarn-audit \
+                   -s $AUDIT_LEVEL \
+                   --ignore-dev-deps \
+                   | tee yarn-reports.txt
+
+.template:nodejs:test:lint:
+    image: node:${NODE_VERSION}-${IMAGE_TYPE}
+    interruptible: true
+    variables:
+        NODE_VERSION: lts
+        IMAGE_TYPE: slim
+        NODE_ENV: development
+    artifacts:
+        name: Lint reports
+        paths:
+            - eslint-report.json
+    script:
+        - 'echo "> Running linting of source code"'
+        - 'echo "> use lint:ci command"'
+        - yarn lint:ci
+
+.template:nodejs:test:unit:
+    image: node:${NODE_VERSION}-${IMAGE_TYPE}
+    interruptible: true
+    variables:
+        NODE_VERSION: lts
+        IMAGE_TYPE: slim
+        ENV_CI: "true"
+    script:
+        - yarn test
+    artifacts:
+        paths:
+            - ./jest-test-results.json
+            - ./junit.xml
+        reports:
+            junit: ./junit.xml

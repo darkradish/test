@@ -1,0 +1,33 @@
+---
+.template:php:install:composer:
+  image: $COMPOSER_DOCKER_IMAGE
+  interruptible: true
+  variables:
+    COMPOSER_HOME: $CI_PROJECT_DIR/.composer
+    COMPOSER_DOCKER_IMAGE: composer:$COMPOSER_VERSION
+    COMPOSER_VERSION: "2"
+    COMPOSER_WITH_PROD_OPTIONS: "false"
+    COMPOSER_OPTIONS: ""
+  cache:
+    key:
+      files:
+        - composer.lock
+    paths:
+      - $COMPOSER_HOME/cache
+    policy: pull-push
+  artifacts:
+    paths:
+      - vendor/
+    expire_in: "2 days"
+  script:
+    - |
+      if [ "$COMPOSER_WITH_PROD_OPTIONS" = "true" ]
+      then
+        COMPOSER_PROD_OPTIONS="--no-dev --optimize-autoloader --classmap-authoritative"
+      fi
+    - |
+      composer install --ansi \
+                       --no-interaction \
+                       --prefer-dist \
+                       --no-progress \
+                      $COMPOSER_PROD_OPTIONS $COMPOSER_OPTIONS

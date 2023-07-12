@@ -1,0 +1,33 @@
+---
+.template:load-testing:k6:
+  image: loadimpact/k6
+  variables:
+    K6_TEST_FILE: ""
+    K6_OPTIONS: ""
+    K6_USER_AGENT: "mdm-user-agent-k6"
+    K6_INSECURE_SKIP_TLS_VERIFY: "false"
+    K6_INFLUXDB_USERNAME: $COMMON_INFLUXDB_USERNAME
+    K6_INFLUXDB_PASSWORD: $COMMON_INFLUXDB_PASSWORD
+    K6_INFLUXDB_SERVER: http://$COMMON_INFLUXDB_SERVER
+    K6_INFLUXDB_DB: "perf"
+    K6_INFLUXDB_INSECURE: "true"
+    MDM_GATE_HASH: $CLOUDARMOR_MDM_GATE_HASH
+  script:
+    - |
+      echo "Tests are executed in $ENV_URL"
+      echo "Options are ${K6_OPTIONS:-none}"
+    - |
+      if [ -n "$K6_INFLUXDB_SERVER" ]
+      then
+        K6_OUTPUT="--out influxdb=$K6_INFLUXDB_SERVER"
+      fi
+    - k6 run $K6_OUTPUT $K6_TEST_FILE --summary-export=load-performance.json $(echo $K6_OPTIONS)
+  after_script:
+    - |
+      if [ -n "$K6_INFLUXDB_SERVER" ]
+      then
+        echo "see results on https://metrics.maisonsdumonde.net/d/XKhgaUpik/k6-load-testing-results-by-groups?orgId=1"
+      fi
+  artifacts:
+    reports:
+      load_performance: load-performance.json

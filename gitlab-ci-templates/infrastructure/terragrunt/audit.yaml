@@ -1,0 +1,21 @@
+---
+
+include:
+  - '/infrastructure/terraform/audit.yaml'
+
+.template:terragrunt:audit:
+  extends: .template:terraform:audit
+  variables:
+    TG_TF_REGISTRY_TOKEN: $CI_JOB_TOKEN
+    TF_ROOT: "."  # path to module Terraform managed by Terragrunt (overriden)
+  script:
+    - cd ${TF_ROOT}
+    - '[ ! -f terragrunt.hcl ] && exit 0'
+    - gsutil -q cp ${TERRAFORM_PLAN_STATE_URL} ${PLAN}
+    # generate a terraform plan in json that will be passed to conftest
+    - terragrunt init
+    - terragrunt show -json "${PLAN}" | grep -iv tgenv > "${PLAN_JSON}"
+    - mv ${CI_PROJECT_DIR}/variables.json variables.json
+    - ${CI_PROJECT_DIR}/conftest test "${PLAN_JSON}" variables.json --combine --all-namespaces -p ${CI_PROJECT_DIR}/policy
+  tags:
+    - terraform

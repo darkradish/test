@@ -1,0 +1,43 @@
+---
+include:
+    - local: deployment/helm/auth.yaml
+    - local: deployment/helm/setup.yaml
+
+.template:helm:build:package:
+    extends: .template:helm:setup
+    variables:
+        HELM_REPO: "mdm"
+        HELM_DIR: "chart"
+        HELM_VERSION: ""
+    script:
+        - |
+          if [ "$HELM_VERSION" == "" ]
+          then
+            HELM_VERSION=$(yq eval .version ${HELM_DIR}/Chart.yaml)
+          fi
+        - echo "HELM_VERSION=${HELM_VERSION}" > build.env
+        - helm package "$HELM_DIR" -d packages --version $HELM_VERSION
+    artifacts:
+        paths:
+            - packages/
+            - build.env
+
+.template:helm:build:package:gcs:
+    extends: .template:helm:build:package
+    variables:
+        HELM_FORCE: "false"
+    script:
+        - !reference [".template:helm:build:package", "script"]
+        - chart_name=$(yq eval .name ${HELM_DIR}/Chart.yaml)
+        - |
+          [ $HELM_FORCE == "true" ]&& opts="--force"
+          helm gcs push $opts packages/${chart_name}-${HELM_VERSION}.tgz $HELM_REPO
+
+.template:helm:send:package:
+    image: curlimages/curl
+    script:
+        - source build.env
+        - |
+          PACKAGE_NAME="packages/${CI_PROJECT_NAME}-${HELM_VERSION}.tgz"
+          curl -X POST ${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/helm/api/stable/charts \
+                --form chart=@${PACKAGE_NAME} --user gitlab-ci-token:$CI_JOB_TOKEN

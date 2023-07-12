@@ -1,0 +1,75 @@
+---
+.template:gitlab-api:merge-request:create:
+  image:
+    name: europe-west1-docker.pkg.dev/digital-staging/mdm-docker-registry/bases/ci-tools:sdk-devops
+    pull_policy: always
+  variables:
+    SOURCE_BRANCH: master
+    TARGET_BRANCH: develop
+    DESCRIPTION: ""
+    TITLE: ""
+    LABELS: ""
+    GITLAB_API_TOKEN: $WEB_DEV_DEVELOPER_ACCESS_TOKEN
+  script:
+    - |
+      REQUEST_BODY="{
+        \"source_branch\": \"$SOURCE_BRANCH\",
+        \"target_branch\": \"$TARGET_BRANCH\",
+        \"title\": \"Merge $SOURCE_BRANCH to $TARGET_BRANCH\",
+        \"description\": \"This merge request has been generated automatically.\"
+      }"
+    - |
+      if [[ -n "$LABELS" ]]; then
+        REQUEST_BODY=$(echo "$REQUEST_BODY" | jq --arg labels "$LABELS" '. + {labels: $labels}')
+      fi
+    - |
+      if [[ -n "$DESCRIPTION" ]]; then
+        REQUEST_BODY=$(echo "$REQUEST_BODY" | jq --arg description "$DESCRIPTION" '.description = $description')
+      fi
+    - |
+      if [[ -n "$TITLE" ]]; then
+        REQUEST_BODY=$(echo "$REQUEST_BODY" | jq --arg title "$TITLE" '.title = $title')
+      fi
+    - echo "$REQUEST_BODY" > request.json
+    - |
+      curl \
+        --request POST \
+        --header "PRIVATE-TOKEN: $GITLAB_API_TOKEN" \
+        --header "Content-Type: application/json" \
+        -d @request.json \
+        "$CI_API_V4_URL/projects/$CI_PROJECT_ID/merge_requests";
+
+.template:gitlab-api:merge-request:create-merge-back:
+  extends: .template:gitlab-api:merge-request:create
+  stage: .post
+  variables:
+    LABELS: "MERGE-BACK"
+
+.template:gitlab-api:merge-request:notes:
+  stage: .post
+  variables:
+    MR_MESSAGE: ""
+    GITLAB_API_TOKEN: $WEB_DEV_DEVELOPER_ACCESS_TOKEN
+  image:
+    name: europe-west1-docker.pkg.dev/digital-staging/mdm-docker-registry/bases/ci-tools:sdk-devops
+    pull_policy: always
+  script:
+    - |
+      if [ -z "$MR_MESSAGE" ]
+      then
+        echo "No message to send"
+      else
+        body="$(echo "$MR_MESSAGE" | \
+         awk 'BEGIN{print "<h1>Deployment Information</h1>"} {print $0"<br/>"}')"
+        REQUEST_BODY="{
+          \"body\": \"$body\"
+        }"
+        echo "$REQUEST_BODY"  > request.json
+
+        curl \
+        --request POST \
+        --header "PRIVATE-TOKEN: $GITLAB_API_TOKEN" \
+        --header "Content-Type: application/json" \
+        -d @request.json \
+        "$CI_API_V4_URL/projects/$CI_PROJECT_ID/merge_requests/$CI_MERGE_REQUEST_IID/notes"
+      fi

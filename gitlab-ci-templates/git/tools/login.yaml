@@ -1,0 +1,19 @@
+---
+.template:git:login:ssh:
+  script:
+    - |
+      if [ -z "$GIT_SSH_PRIV_KEY" ]
+      then
+        echo "ERROR : please set $GIT_SSH_PRIV_KEY for login in ssh"
+        exit 1
+      fi
+      mkdir -p ~/.ssh
+      ssh-keyscan $CI_SERVER_HOST >> ~/.ssh/known_hosts
+      chmod 600 ~/.ssh/*
+      eval $(ssh-agent -s)
+      echo "$GIT_SSH_PRIV_KEY" | tr -d '\r' | ssh-add -
+    - |
+      git config --global user.name "Runner $CI_PROJECT_NAME"
+      git config --global user.email "runner+$CI_PROJECT_NAME@maisonsdumonde.com"
+      git remote set-url --push origin git@$CI_SERVER_HOST:${CI_PROJECT_PATH}.git
+      git checkout $CI_COMMIT_REF_NAME

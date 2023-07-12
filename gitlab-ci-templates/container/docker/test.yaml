@@ -1,0 +1,190 @@
+---
+include:
+  - local: container/docker/auth.yaml
+
+.template:docker:test:sizing:
+  image: wagoodman/dive:latest
+  variables:
+    DOCKER_REGISTRY: "europe-west1-docker.pkg.dev"
+    DOCKER_IMAGE: ""
+    DOCKER_TAG: ""
+    DOCKER_TLS_CERTDIR: ""
+    DOCKER_DRIVER: overlay
+    DOCKER_HOST: tcp://localhost:2375
+  services:
+    - docker:stable-dind
+  script:
+    - !reference [".templates:docker:auth:credential", "script"]
+    - CI=true dive $DOCKER_REGISTRY/$DOCKER_IMAGE:$DOCKER_TAG
+  tags:
+    - docker-dind
+  rules:
+    - if: $SIZING_TESTS == 'false'
+      when: never
+    - when: on_success
+
+.template:docker:test:security:
+  image: docker:stable
+  variables:
+    DOCKER_REGISTRY: "europe-west1-docker.pkg.dev"
+    DOCKER_IMAGE: ""
+    DOCKER_TAG: ""
+    DOCKER_TLS_CERTDIR: ""
+    DOCKER_DRIVER: overlay
+    DOCKER_HOST: tcp://localhost:2375
+  services:
+    - docker:stable-dind
+  before_script:
+    - |
+      TRIVY_VERSION=$(
+        wget -qO - \
+         "https://api.github.com/repos/aquasecurity/trivy/releases/latest" \
+         | grep '"tag_name":' \
+         | sed -E 's/.*"v([^"]+)".*/\1/')
+    - |
+      TRIVY_URL=https://github.com/aquasecurity/trivy/releases/download/
+      TRIVY_FILE=v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz
+    - |
+      wget --no-verbose \
+        ${TRIVY_URL}${TRIVY_FILE} -O - | tar -zxvf -
+  script:
+    - !reference [".templates:docker:auth:credential", "script"]
+    # get image
+    - docker pull $DOCKER_REGISTRY/$DOCKER_IMAGE:$DOCKER_TAG
+    # Build report
+    - |
+      ./trivy --cache-dir ".trivycache/" \
+              image \
+              --exit-code 0 \
+              --no-progress \
+              --format template \
+              --template "@contrib/gitlab.tpl" \
+              -o gl-container-scanning-report.json \
+              $DOCKER_REGISTRY/$DOCKER_IMAGE:$DOCKER_TAG
+    # Print report
+    - |
+      ./trivy --cache-dir ".trivycache/" \
+              image \
+              --exit-code 0 \
+              --no-progress \
+              --severity HIGH \
+              --ignore-unfixed \
+              $DOCKER_REGISTRY/$DOCKER_IMAGE:$DOCKER_TAG
+    # Fail on critical vulnerabilities
+    - |
+      ./trivy --cache-dir ".trivycache/" \
+              image \
+              --exit-code 1 \
+              --severity CRITICAL \
+              --no-progress \
+              --ignore-unfixed \
+              $DOCKER_REGISTRY/$DOCKER_IMAGE:$DOCKER_TAG
+  cache:
+    key: trivy-cache
+    paths:
+      - .trivycache/
+  artifacts:
+    reports:
+      container_scanning: gl-container-scanning-report.json
+  tags:
+    - docker-dind
+  rules:
+    - if: $SECURITY_TESTS == 'false'
+      when: never
+    - when: on_success
+
+.template:docker:test:lint:
+  image: hadolint/hadolint:v2.0.0-debian
+  variables:
+    DOCKER_FILE: Dockerfile
+    IGNORE_CODES: ""
+  before_script:
+    - apt-get update
+    - apt-get install -y jq
+    - |
+      # Set colors for info/warning/error text
+      DEFAULT="\u001b[0m"
+      BLUE="\u001b[34;1m"
+      YELLOW="\u001b[33;1m"
+      RED="\u001b[31;1m"
+
+      error_displayer() {
+         lines_array=()
+         levels_array=()
+         codes_array=()
+
+      # Initalize multiple array by parsing the hadolint JSON result
+         local lines
+         local levels
+         local color
+         local codes
+
+         lines=$(echo "$hadolint_output" | jq -r '.[].line')
+         for line in $lines; do
+            lines_array+=("$line")
+         done
+
+         levels=$(echo "$hadolint_output" | jq -r '.[].level')
+         for level in $levels; do
+            if [ "$level" = "info" ]; then
+               color=$BLUE
+            elif [ "$level" = "warning" ]; then
+               color=$YELLOW
+            elif [ "$level" = "error" ]; then
+               color=$RED
+            fi
+            levels_array+=("$color")
+         done
+
+         codes=$(echo "$hadolint_output" | jq -r '.[].code')
+         for code in $codes; do
+            codes_array+=("$code")
+         done
+
+         for (( i=0; i<${#lines_array[@]}; i++ )); do
+            echo -e "${levels_array[$i]}line:${lines_array[$i]}\
+               ${codes_array[$i]}\
+               $(echo "$hadolint_output"\
+                     | jq -r --argjson i "$i" '.[$i].message')$DEFAULT"
+         done
+      }
+    - |
+      error_counter() {
+        echo "$hadolint_output" \
+                | jq -e '.[] | select(.level=="error").level' | wc -l
+      }
+  script:
+    - |
+      IGNORE_OPTS="$(echo "$IGNORE_CODES" \
+                       | sed 's/[ ]\|^\(.\)/ --ignore \1/g')"
+    - mkdir reports
+    - |
+      hadolint $IGNORE_OPTS \
+               $DOCKER_FILE \
+               --format gitlab_codeclimate \
+               --no-fail > reports/report-"$CI_PROJECT_NAME".json
+    - |
+      hadolint_output="$(hadolint \
+                             $IGNORE_OPTS \
+                             $DOCKER_FILE \
+                             --format json \
+                             --no-fail)"
+    - error_displayer
+    - |
+      if echo "$hadolint_output" \
+              | jq -e '.[] | select(.level=="error")' > /dev/null
+      then
+         error_count=$(error_counter)
+         echo "❌ You have $error_count error(s) in your Dockerfile."
+         exit 1
+      fi
+  artifacts:
+    name: |
+      "$CI_JOB_NAME artifacts from $CI_PROJECT_NAME on $CI_COMMIT_REF_SLUG"
+    expire_in: 1 week
+    when: always
+    reports:
+      codequality:
+        - "reports/*"
+    paths:
+      - "reports/*"

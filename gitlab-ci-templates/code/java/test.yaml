@@ -1,0 +1,15 @@
+---
+.template:java:test:maven:jacoco:
+  image: maven:${MAVEN_IMAGE_TAG}
+  interruptible: true
+  variables:
+    MAVEN_IMAGE_TAG: 3.6-openjdk-17-slim
+  script:
+    - |
+      mvn -s ${MAVEN_SETTINGS} \
+          -B org.jacoco:jacoco-maven-plugin:prepare-agent \
+             surefire:test \
+             org.jacoco:jacoco-maven-plugin:report \
+          -Dmaven.repo.local=.m2
+  tags:
+    - large

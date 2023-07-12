@@ -1,0 +1,23 @@
+---
+include:
+  local: git/tools/login.yaml
+
+.template:nodejs:lerna:publish:
+  image: node:${NODE_VERSION}-${IMAGE_TYPE}
+  interruptible: false
+  variables:
+    NODE_VERSION: lts
+    IMAGE_TYPE: slim
+    NODE_ENV: development
+    LERNA_PUBLISH_TYPE: canary
+    GIT_DEPTH: 0
+  script:
+    - |
+      apt-get update
+      apt-get install -y git openssh-client
+    - !reference [".template:git:login:ssh", "script"]
+    - |
+      yarn run lerna:publish:${LERNA_PUBLISH_TYPE}
+  rules:
+    - if: "$CI_COMMIT_MESSAGE =~ /^chore:/"
+      when: never

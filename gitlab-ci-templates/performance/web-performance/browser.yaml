@@ -1,0 +1,77 @@
+---
+.template:web_performance:sitespeed:
+  image: docker:git
+  variables:
+    SITESPEED_IMAGE: sitespeedio/sitespeed.io
+    SITESPEED_VERSION: 25.8.3
+    SITESPEED_OPTIONS: "--userAgent mdm-user-agent-sitespeed"
+    SITESPEED_INFLUXDB_USERNAME: $COMMON_INFLUXDB_USERNAME
+    SITESPEED_INFLUXDB_PASSWORD: $COMMON_INFLUXDB_PASSWORD
+    SITESPEED_INFLUXDB_SERVER: $COMMON_INFLUXDB_SERVER
+    SITESPEED_INFLUXDB_PORT: 80
+    SITESPEED_INFLUXDB_DB: "perf"
+    DOCKER_HOST: tcp://docker:2375
+    DOCKER_TLS_CERTDIR: ""
+    CUSTOM_URIS: ""
+  tags:
+    - dind
+  services:
+    - docker:stable-dind
+  script:
+    - |
+      if [ -n "$CUSTOM_URIS" ]
+      then
+        TEST_URL=$(echo $CUSTOM_URIS | sed "s@^@${ENV_URL}@ ; s@ /@,${ENV_URL}/@g" )
+      else
+        TEST_URL=${ENV_URL}
+      fi
+      echo "Starting test on ${TEST_URL}"
+    - mkdir gitlab-exporter
+    # Busybox wget does not support proxied HTTPS, get the real thing.
+    # See https://gitlab.com/gitlab-org/gitlab/-/issues/287611.
+    - (env | grep -i _proxy= >/dev/null 2>&1) && apk --no-cache add wget
+    - wget -O ./gitlab-exporter/index.js https://gitlab.com/gitlab-org/gl-performance/raw/1.1.0/index.js
+    - mkdir sitespeed-results
+    - |
+      function propagate_env_vars() {
+        CURRENT_ENV=$(printenv)
+
+        for VAR_NAME; do
+          echo $CURRENT_ENV | grep "${VAR_NAME}=" > /dev/null && echo "--env $VAR_NAME "
+        done
+      }
+    - |
+      docker run \
+        $(propagate_env_vars \
+          auto_proxy \
+          https_proxy \
+          http_proxy \
+          no_proxy \
+          AUTO_PROXY \
+          HTTPS_PROXY \
+          HTTP_PROXY \
+          NO_PROXY \
+        ) \
+        --shm-size=1g \
+        --rm \
+        -v "$(pwd)":/sitespeed.io \
+           $SITESPEED_IMAGE:$SITESPEED_VERSION \
+               -r "mdm-gate:$CLOUDARMOR_MDM_GATE_HASH" \
+               --plugins.add ./gitlab-exporter \
+               --cpu \
+               --outputFolder sitespeed-results \
+               --influxdb.host "$SITESPEED_INFLUXDB_SERVER" \
+               --influxdb.port "$SITESPEED_INFLUXDB_PORT" \
+               --influxdb.username "$SITESPEED_INFLUXDB_USERNAME" \
+               --influxdb.password "$SITESPEED_INFLUXDB_PASSWORD" \
+               --influxdb.database "$SITESPEED_INFLUXDB_DB" \
+               --influxdb.tags "test=sitespeed,project=${CI_PROJECT_NAME},branch=${CI_COMMIT_REF_NAME}" \
+                ${TEST_URL} $SITESPEED_OPTIONS
+    - mv sitespeed-results/data/performance.json browser-performance.json
+  after_script:
+    - echo "see graph on https://metrics.maisonsdumonde.net/d/000000053/sitespeed?orgId=1&var-branch=${CI_COMMIT_REF_NAME}"
+  artifacts:
+    paths:
+      - sitespeed-results/
+    reports:
+      browser_performance: browser-performance.json

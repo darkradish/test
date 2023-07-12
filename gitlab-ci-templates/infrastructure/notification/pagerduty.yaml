@@ -1,0 +1,21 @@
+---
+
+.template:notification:pager-duty:
+  script:
+    - |
+      curl -sX POST $PAGERDUTY_WEBHOOK \
+      --header "Content-Type: application/json" \
+      --data @- << EOF
+      {
+      "payload": {
+          "summary": "$summary",
+          "source": "$source",
+          "severity": "$severity",
+          "component": "$component"
+      },
+      "routing_key": "$PAGERDUTY_TOKEN",
+      "event_action": "trigger",
+      "client": "$CI_PROJECT_NAME",
+      "client_url": "$CI_PROJECT_URL"
+      }
+      EOF

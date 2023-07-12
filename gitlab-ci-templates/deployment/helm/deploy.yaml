@@ -1,0 +1,227 @@
+---
+include:
+  - local: deployment/helm/setup.yaml
+  - local: deployment/rundeck/export.yaml
+  - local: deployment/kubectl/clean.yaml
+  - local: infrastructure/dns/ns1.yaml
+
+.template:helm:deploy:usage: &template-helm-deploy-usage
+  - |
+    if [ -z "${KUBE_NAMESPACE}" ]; then
+          echo -n "You are trying to (un)install your application, but"
+          echo "you haven't set Gitlab Kubernetes integration. ."
+          exit 1
+    elif [ -z "${CI_ENVIRONMENT_SLUG}" ]; then
+          echo -n "You forgot to specify the environment hash in your ."
+          echo "gitlab-ci.yml. It's not going to work until you do."
+          exit 1
+    fi
+
+.template:helm:deploy:install:
+  image:
+    name: europe-west1-docker.pkg.dev/digital-staging/mdm-docker-registry/bases/ci-tools:sdk-devops
+    pull_policy: always
+  variables:
+    HELM_OPTS: ""
+    RELEASE_NAME: $CI_ENVIRONMENT_SLUG
+    RELEASE_ENV_TYPE: $CI_ENVIRONMENT_SLUG
+    RELEASE_HOST: ""
+    RELEASE_PATH: ""
+    HELM_CREDENTIALS: !reference [".template:helm:auth:gcs", "variables", "HELM_CREDENTIALS"]
+    HELM_GCS_ENABLED: !reference [".template:helm:auth:gcs", "variables", "HELM_GCS_ENABLED"]
+    HELM_REPO: "mdm"
+    HELM_DIR: "chart"
+    HELM_CUSTOM_KEYS: ""
+    HELM_GCS_BUCKET: !reference [".template:helm:auth:gcs", "variables", "HELM_GCS_BUCKET"]
+    IMAGE_TAG: $CI_COMMIT_SHORT_SHA
+    RELEASE_URI_SCHEMA: "https"
+    RUNDECK_EXPORT: "false"
+    RUNDECK_HELM_VALUES: ""
+    HELM_TIMEOUT: "600s"
+  artifacts:
+    reports:
+      dotenv: .dotenv_gitlab.env
+  dependencies: []
+  script:
+    - !reference [".template:rundeck:export", "script"]
+    - !reference [".template:helm:setup", "before_script"]
+    - *template-helm-deploy-usage
+    - |
+      if [ -z "${RELEASE_HOST}" ]
+      then
+        echo -n "You forgot to specify the RELEASE_HOST variable in "
+        echo "your .gitlab-ci.yml. It's not going to work until you do."
+        echo -n "For instance, a RELEASE_HOST could be "
+        echo "${CI_COMMIT_REF_SLUG}-${CI_PROJECT_NAME}.staging.web.xm"
+        exit 1
+      fi
+    - |
+      echo -n "Deploying release ${RELEASE_NAME} of "
+      echo "${CI_PROJECT_NAME} in namespace ${KUBE_NAMESPACE} ..."
+      echo "Linking its app dependencies to their respective master..."
+    - |
+      echo "Making dotenv for gitlab environments"
+      echo "ENV_URL=${RELEASE_URI_SCHEMA}://${RELEASE_HOST}" > .dotenv_gitlab.env
+    - |
+      HELM_VALUES="${HELM_DIR}/values.yaml"
+      if [ -f ${HELM_DIR}/values-${RELEASE_ENV_TYPE}.yaml ]
+      then
+          echo "Values for ${RELEASE_ENV_TYPE} has been found!"
+          HELM_VALUES="${HELM_VALUES},${HELM_DIR}/values-${RELEASE_ENV_TYPE}.yaml"
+      fi
+    - |
+      echo "The timeout value passed to the helm command is set to ${HELM_TIMEOUT}"
+    - |
+      if helm upgrade --install "${RELEASE_NAME}" "${HELM_DIR}" \
+           --namespace "${KUBE_NAMESPACE}" \
+           --timeout "${HELM_TIMEOUT}" \
+           --set global.gcp.projectId="${GOOGLE_PROJECT_ID}" \
+           --set global.environment.path="${CI_PROJECT_PATH_SLUG}" \
+           --set global.environment.reference="${CI_COMMIT_REF_SLUG}" \
+           --set global.environment.type="${RELEASE_NAME}" \
+           --set-string global.image.tag="$IMAGE_TAG" \
+            -f "$HELM_VALUES" \
+           --set "$HELM_CUSTOM_KEYS" \
+           --wait $HELM_OPTS ; then
+          echo "Deployment Ready."
+      else
+        echo "-------------------------------------------------------------------------------------------------"
+        echo "> ERROR, the deployment failed !!!"
+        echo "> Please go to k9s and see why deployment failed"
+        echo "> k9s -c pods -n ${KUBE_NAMESPACE}"
+        echo "> then, search with /${RELEASE_NAME}"
+        echo "> See https://maisonsdumonde.atlassian.net/wiki/spaces/D/pages/1956315149/Troubleshooting+articles for errors information"
+        echo "-------------------------------------------------------------------------------------------------"
+        exit 1
+      fi
+    - |
+      if [ $RUNDECK_EXPORT == 'true' ]; then
+        RUNDECK_HELM_VALUES=$RUNDECK_HELM_VALUES,$HELM_CUSTOM_KEYS
+        export_cronjobs $RUNDECK_HELM_VALUES
+      fi
+
+.template:helm:deploy:install:review:
+  extends: .template:helm:deploy:install
+  interruptible: true
+  variables:
+    RELEASE_HOST: "$CI_ENVIRONMENT_SLUG-$CI_PROJECT_NAME.$RELEASE_DOMAIN"
+    RELEASE_ENV_TYPE: "review"
+  environment:
+    action: start
+    name: review/$CI_COMMIT_REF_NAME
+    url: $ENV_URL/$RELEASE_PATH
+    auto_stop_in: 4h
+    on_stop: deploy:review:stop
+
+.template:helm:deploy:install:review:digital:
+  extends: .template:helm:deploy:install:review
+  variables:
+    RELEASE_DOMAIN: "mdm-staging.com"
+    GOOGLE_PROJECT_ID: "${GOOGLE_CLOUD_DIGITAL_STAGING_PROJECT}"
+    NS1_ZONE: !reference [".template:dns:ns1:add:cname:digital:review", "variables", "NS1_ZONE"]
+    NS1_DOMAIN: !reference [".template:dns:ns1:add:cname:digital:review", "variables", "NS1_DOMAIN"]
+    NS1_API_KEY: !reference [".template:dns:ns1:add:cname:digital:review", "variables", "NS1_API_KEY"]
+    NS1_ANSWER: ""
+    CUSTOM_DOMAIN: "false"
+  # After script for dns in review for digit
+  # Gitlab ci not fully support after start script (the pipeline stay running if no deploy)
+  after_script:
+    # If no custom domain specified, exit
+    - '[ "$CUSTOM_DOMAIN" == "true" ]|| exit 0'
+    - !reference [".template:dns:ns1:add:cname:digital:review", "script"]
+
+.template:helm:deploy:install:staging:
+  extends: .template:helm:deploy:install
+  variables:
+    RELEASE_HOST: $CI_PROJECT_NAME.$RELEASE_DOMAIN
+    RELEASE_ENV_TYPE: "staging"
+  environment:
+    action: start
+    name: staging
+    url: $ENV_URL/$RELEASE_PATH
+
+.template:helm:deploy:install:preproduction:
+  extends: .template:helm:deploy:install
+  variables:
+    RELEASE_HOST: $CI_PROJECT_NAME.$RELEASE_DOMAIN
+    RELEASE_ENV_TYPE: "preproduction"
+  environment:
+    action: start
+    name: preproduction
+    url: $ENV_URL/$RELEASE_PATH
+
+.template:helm:deploy:install:production:
+  extends: .template:helm:deploy:install
+  variables:
+    RELEASE_HOST: $CI_PROJECT_NAME.$RELEASE_DOMAIN
+    RELEASE_ENV_TYPE: "production"
+  environment:
+    action: start
+    name: production
+    url: $ENV_URL/$RELEASE_PATH
+
+.template:helm:deploy:install:staging:digital:
+  extends: .template:helm:deploy:install:staging
+  variables:
+    RELEASE_DOMAIN: "mdm-staging.com"
+    GOOGLE_PROJECT_ID: "${GOOGLE_CLOUD_DIGITAL_STAGING_PROJECT}"
+
+.template:helm:deploy:install:preproduction:digital:
+  extends: .template:helm:deploy:install:preproduction
+  variables:
+    RELEASE_DOMAIN: "mdm-preprod.com"
+    GOOGLE_PROJECT_ID: $GOOGLE_CLOUD_DIGITAL_PREPRODUCTION_PROJECT
+
+.template:helm:deploy:install:production:digital:
+  extends: .template:helm:deploy:install:production
+  variables:
+    RELEASE_DOMAIN: "maisonsdumonde.com"
+    GOOGLE_PROJECT_ID: $GOOGLE_CLOUD_DIGITAL_PRODUCTION_PROJECT
+
+.template:helm:deploy:uninstall:
+  image:
+    name: europe-west1-docker.pkg.dev/digital-staging/mdm-docker-registry/bases/ci-tools:sdk-devops
+    pull_policy: always
+  variables:
+    RELEASE_NAME: $CI_ENVIRONMENT_SLUG
+    RELEASE_HOST: ""
+    GIT_STRATEGY: none
+    HELM_REPO: "mdm"
+    HELM_DIR: "chart/"
+  environment:
+    action: stop
+  dependencies: []
+  script:
+    - *template-helm-deploy-usage
+    - |
+      if [ -n "$(helm list -n ${KUBE_NAMESPACE} -a -l "name=${RELEASE_NAME}" -q)" ]
+      then
+        helm uninstall "${RELEASE_NAME}" \
+              --namespace "${KUBE_NAMESPACE}"
+      else
+        echo "Helm release not found, skip uninstall"
+      fi
+  rules:
+    - when: manual
+
+.template:helm:deploy:uninstall:review:
+  extends: .template:helm:deploy:uninstall
+  image:
+    name: europe-west1-docker.pkg.dev/digital-staging/mdm-docker-registry/bases/ci-tools:sdk-devops
+    pull_policy: always
+  variables:
+    # need to specify all vars else merge not work
+    NS1_ZONE: !reference [".template:dns:ns1:delete:cname:digital:review", "variables", "NS1_ZONE"]
+    NS1_DOMAIN: !reference [".template:dns:ns1:delete:cname:digital:review", "variables", "NS1_DOMAIN"]
+    NS1_API_KEY: !reference [".template:dns:ns1:delete:cname:digital:review", "variables", "NS1_API_KEY"]
+    CUSTOM_DOMAIN: "false"
+  environment:
+    name: review/$CI_COMMIT_REF_NAME
+    action: stop
+  # After script for dns in review
+  # Gitlab ci doesn't support multi stop jobs
+  after_script:
+    - !reference [".template:kubectl:clean:objects", "script"]
+    # If no custom domain specified, exit
+    - '[ "$CUSTOM_DOMAIN" == "true" ]|| exit 0'
+    - !reference [".template:dns:ns1:delete:cname", "script"]

@@ -1,0 +1,15 @@
+---
+include:
+  - local: "/devops/gitlab-ci/lint.yaml"
+
+stages:
+  - Test
+
+workflow:
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+      when: always
+    - when: never
+
+test:yamllint:
+  extends: .template:gitlab-ci:yamllint

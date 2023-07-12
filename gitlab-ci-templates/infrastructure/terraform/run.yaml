@@ -1,0 +1,61 @@
+---
+
+.template:terraform:init: &template_terraform_init
+  image:
+    name: europe-west1-docker.pkg.dev/digital-staging/mdm-docker-registry/bases/ci-tools:terraform-terragrunt
+    pull_policy: always
+  before_script:
+    - |
+       cat <<-EOF > ~/.terraformrc
+       credentials "git.maisonsdumonde.net" {
+         token = "${CI_JOB_TOKEN}"
+       }
+       EOF
+    - |
+      find . -maxdepth 1 -name "*.tf" -print0 \
+        | xargs -0 -n1 -I {} \
+          sed -i "s/ssh:\/\/git@git.maisonsdumonde.net/\
+          https:\/\/gitlab-ci-token:${CI_JOB_TOKEN}@git.maisonsdumonde.net/" {}
+    - |
+      echo "$TERRAFORM_GCP_SA_KEY" > /tmp/key.json
+      gcloud auth activate-service-account --key-file /tmp/key.json
+    - terraform -chdir="${TF_ROOT_FILE_PATH:-.}/" init > /dev/null
+
+.template:terraform:run:plan:
+  variables:
+    TF_IN_AUTOMATION: "true"
+    GOOGLE_APPLICATION_CREDENTIALS: /tmp/key.json
+    TF_ROOT_FILE_PATH: ""
+  <<: *template_terraform_init
+  script:
+    - terraform -chdir="${TF_ROOT_FILE_PATH:-.}/" plan
+
+.template:terraform:run:show-plan:
+  variables:
+    TF_IN_AUTOMATION: "true"
+    GOOGLE_APPLICATION_CREDENTIALS: /tmp/key.json
+    PLAN: plan.cache
+    REPORT: tf_report.json
+    TERRAFORM_PLAN_STATE_URL: ${TERRAFORM_PLAN_GSUTIL_LINK}/${CI_PROJECT_NAME}/${CI_JOB_ID}/${PLAN}
+    TF_ROOT_FILE_PATH: ""
+  <<: *template_terraform_init
+  script:
+    - terraform -chdir="${TF_ROOT_FILE_PATH:-.}/" plan -out="${PLAN}"
+    - terraform -chdir="${TF_ROOT_FILE_PATH:-.}/" show --json "${PLAN}" | jq -r '([.resource_changes[]?.change.actions?]|flatten)|{"create":(map(select(.=="create"))|length),"update":(map(select(.=="update"))|length),"delete":(map(select(.=="delete"))|length)}' > "${TF_ROOT_FILE_PATH:-./}${REPORT}"
+    - gsutil cp "${TF_ROOT_FILE_PATH:-.}/${PLAN}" "${TERRAFORM_PLAN_STATE_URL}"
+    - echo "TERRAFORM_PLAN_STATE_FOLDER_NAME=${CI_JOB_ID}" >> ${TF_ROOT_FILE_PATH:-.}/terraform.env
+  artifacts:
+    name: plan review
+    reports:
+      terraform: ${TF_ROOT_FILE_PATH:-.}/${REPORT}
+      dotenv: ${TF_ROOT_FILE_PATH:-.}/terraform.env
+    expire_in: 1 week
+    when: on_success
+
+.template:terraform:run:apply:
+  variables:
+    TF_IN_AUTOMATION: "true"
+    GOOGLE_APPLICATION_CREDENTIALS: /tmp/key.json
+  <<: *template_terraform_init
+  script:
+    - terraform apply -input=false -auto-approve

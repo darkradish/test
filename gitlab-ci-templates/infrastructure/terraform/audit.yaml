@@ -1,0 +1,48 @@
+---
+
+.template:terraform:audit:
+  image:
+    name: europe-west1-docker.pkg.dev/digital-staging/mdm-docker-registry/bases/ci-tools:terraform-terragrunt
+    pull_policy: always
+  variables:
+    PLAN: plan.cache
+    PLAN_JSON: plan.json
+    CONFTEST_VERSION: 0.21.0
+    CONFTEST_KERNEL: Linux
+    OPA_RULES_REF: master
+    OPA_RULES_REPO: https://gitlab-ci-token:${CI_JOB_TOKEN}@${CI_SERVER_HOST}/common/opa-rules
+    TERRAFORM_PLAN_STATE_URL: ${TERRAFORM_PLAN_GSUTIL_LINK}/${CI_PROJECT_NAME}/${TERRAFORM_PLAN_STATE_FOLDER_NAME}/${PLAN}
+    TF_ROOT_FILE_PATH: ""
+    TF_IN_AUTOMATION: "true"
+  before_script:
+    - |
+       cat <<-EOF > ~/.terraformrc
+       credentials "git.maisonsdumonde.net" {
+         token = "${CI_JOB_TOKEN}"
+       }
+       EOF
+    - git clone -q --depth 1 --branch "${OPA_RULES_REF}" "${OPA_RULES_REPO}" ${CI_PROJECT_DIR}/opa-rules && mv ${CI_PROJECT_DIR}/opa-rules/policy ${CI_PROJECT_DIR}/
+    - |
+      curl -OfSsL https://github.com/open-policy-agent/conftest/releases/download/v${CONFTEST_VERSION}/conftest_${CONFTEST_VERSION}_${CONFTEST_KERNEL}_x86_64.tar.gz && \
+      tar zxf "conftest_${CONFTEST_VERSION}_${CONFTEST_KERNEL}_x86_64.tar.gz" && \
+      rm "conftest_${CONFTEST_VERSION}_${CONFTEST_KERNEL}_x86_64.tar.gz" && \
+      chmod +x conftest
+    - |
+      cat <<-EOF > ${CI_PROJECT_DIR}/variables.json
+      {
+        "project_id": "${GOOGLE_PROJECT_ID}",
+        "identifier": "${OWNER}",
+        "entity": "${ENTITY}",
+        "environment": "${ENVIRONMENT}",
+        "mode": "${AUDIT_MODE}"
+      }
+      EOF
+  script:
+    - |
+      [ -n "${TERRAFORM_GCP_SA_KEY}" ] && echo "$TERRAFORM_GCP_SA_KEY" > /tmp/key.json && \
+      export GOOGLE_APPLICATION_CREDENTIALS="/tmp/key.json" && \
+      gcloud auth activate-service-account --key-file /tmp/key.json || true
+    - terraform -chdir="${TF_ROOT_FILE_PATH:-.}/" init
+    - gsutil -q cp "${TERRAFORM_PLAN_STATE_URL}" "${TF_ROOT_FILE_PATH:-.}/${PLAN}"
+    - terraform -chdir="${TF_ROOT_FILE_PATH:-.}/" show -json "${PLAN}" > "${TF_ROOT_FILE_PATH:-.}/${PLAN_JSON}"
+    - ./conftest test "${TF_ROOT_FILE_PATH:-.}/${PLAN_JSON}" variables.json --combine --all-namespaces -p "${CI_PROJECT_DIR}"

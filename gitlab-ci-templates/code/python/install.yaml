@@ -1,0 +1,32 @@
+---
+
+.template:python:install:requirements:
+  image: python:${PYTHON_VERSION}-slim
+  variables:
+    PYTHON_VERSION: "3.9"
+    REQUIREMENT_PATH: "./"
+    REQUIREMENT_FILE: "requirements.txt"
+    PYTHON_SCRIPTS_FOLDER: "./"
+    PYLINT_SCORE_MIN: 9
+    PYTHONUSERBASE: ./.python
+  script:
+    - |
+      if [[ -f ${REQUIREMENT_PATH}/${REQUIREMENT_FILE} ]]
+      then
+        echo "Requirements file found @ ${REQUIREMENT_PATH}/${REQUIREMENT_FILE}"
+        pip install -q \
+          --user \
+          --disable-pip-version-check \
+          --cache-dir .cache/ \
+          -r ${REQUIREMENT_PATH}/${REQUIREMENT_FILE}
+      fi
+  artifacts:
+    paths:
+      - .python
+    expire_in: 1 week
+  cache:
+    key:
+      files:
+        - requirements.txt
+    paths:
+      - .cache/
